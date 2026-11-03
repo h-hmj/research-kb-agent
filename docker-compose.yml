@@ -1,0 +1,35 @@
+services:
+  research-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: research-agent:0.1.0
+    container_name: research-agent
+    ports:
+      - "8000:8000"
+    environment:
+      APP_NAME: "科研知识库与实验助理 Agent"
+      APP_VERSION: "0.1.0"
+      DEBUG: "false"
+      API_PREFIX: "/api/v1"
+      LOG_LEVEL: "INFO"
+      DATA_DIR: "/app/data"
+      MAX_UPLOAD_SIZE_MB: "20"
+      DOCUMENTS_DIR: "/app/data/documents"
+      METADATA_DIR: "/app/data/metadata"
+    volumes:
+      - research_data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  research_data:
