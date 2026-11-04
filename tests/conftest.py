@@ -31,6 +31,15 @@ def test_settings(tmp_path: Path) -> Settings:
         max_upload_size_mb=1,
         documents_dir=data_dir / "documents",
         metadata_dir=data_dir / "metadata",
+        chunks_dir=data_dir / "chunks",
+        vector_store_dir=data_dir / "vector_store",
+        embedding_model_path=tmp_path / "models" / "missing-model",
+        embedding_device="cpu",
+        embedding_normalize=True,
+        chunk_size=120,
+        chunk_overlap=20,
+        retrieval_top_k=5,
+        max_retrieval_text_length=1000,
     )
 
 

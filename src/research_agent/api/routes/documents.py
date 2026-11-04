@@ -16,7 +16,13 @@ from fastapi import (
 )
 
 from ...schemas.documents import DocumentDetail, DocumentListResponse
+from ...schemas.retrieval import IndexDocumentResponse
 from ...services.document_service import DocumentService, DocumentServiceError
+from ...services.embedding_service import (
+    EMBEDDING_UNAVAILABLE_DETAIL,
+    EmbeddingModelUnavailableError,
+)
+from ...services.indexing_service import IndexingService
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -26,6 +32,12 @@ _UPLOAD_CHUNK_SIZE = 1024 * 1024
 def get_document_service(request: Request) -> DocumentService:
     """从应用状态中取出文档服务。"""
     service: DocumentService = request.app.state.document_service
+    return service
+
+
+def get_indexing_service(request: Request) -> IndexingService:
+    """从应用状态中取出索引服务。"""
+    service: IndexingService = request.app.state.indexing_service
     return service
 
 
@@ -106,11 +118,33 @@ async def get_document(
         raise _http_exception(exc) from exc
 
 
+@router.post(
+    "/{document_id}/index",
+    response_model=IndexDocumentResponse,
+    summary="为文档创建或重建索引",
+    description="按页分块并生成本地向量索引；模型不可用时返回 503。",
+)
+def index_document(
+    document_id: str,
+    service: Annotated[IndexingService, Depends(get_indexing_service)],
+) -> IndexDocumentResponse:
+    """建立或重建单份文档的本地向量索引。"""
+    try:
+        return service.index_document(document_id)
+    except EmbeddingModelUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=EMBEDDING_UNAVAILABLE_DETAIL,
+        ) from exc
+    except DocumentServiceError as exc:
+        raise _http_exception(exc) from exc
+
+
 @router.delete(
     "/{document_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="删除文档",
-    description="同时删除文档 PDF 和对应的 JSON 元数据。",
+    description="同时删除文档 PDF、JSON 元数据、chunk 文件和向量索引记录。",
 )
 async def delete_document(
     document_id: str,

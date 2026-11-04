@@ -31,8 +31,9 @@ ENV/
 .mypy_cache/
 .ruff_cache/
 
-# 本地数据与日志
+# 本地数据、模型与日志
 data/
+models/
 *.log
 
 # IDE / 操作系统文件

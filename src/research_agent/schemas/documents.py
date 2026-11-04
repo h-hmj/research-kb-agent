@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 DocumentStatus = Literal["processed", "failed"]
+IndexStatus = Literal["not_indexed", "indexed", "failed"]
 
 
 class DocumentPage(BaseModel):
@@ -25,6 +26,10 @@ class DocumentSummary(BaseModel):
     page_count: int = Field(ge=0, description="PDF 页数")
     created_at: str = Field(description="UTC ISO 8601 创建时间")
     status: DocumentStatus = Field(description="处理状态")
+    index_status: IndexStatus = Field(
+        default="not_indexed",
+        description="向量索引状态",
+    )
 
 
 class DocumentDetail(DocumentSummary):

@@ -4,8 +4,10 @@
 
 当前已实现：
 
-- `file_storage.py`：将 PDF 以 UUID 文件名流式写入本地目录，限制大小并安全删除。
-- `metadata_store.py`：将文档元数据以 UTF-8 JSON 原子写入 `{document_id}.json`。
+- `file_storage.py`：PDF 流式写入、读取和安全删除。
+- `metadata_store.py`：文档元数据 JSON 原子读写。
+- `chunk_store.py`：每篇文档的 chunk JSON 原子读写与回滚。
+- `vector_store.py`：FAISS `IndexFlatIP` 索引、manifest 映射、重建和进程内锁。
 
-不连接数据库或外部存储服务。所有路径都从配置读取，并使用
-`pathlib` 与 UUID 校验防止路径穿越。
+所有路径都从配置读取，使用 `pathlib`、UUID 和父目录校验限制在配置目录内。
+向量索引只保存在本机，不连接云端数据库。

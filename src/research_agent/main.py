@@ -9,20 +9,56 @@ from fastapi.responses import JSONResponse
 
 from .api.routes.documents import router as documents_router
 from .api.routes.health import router as health_router
+from .api.routes.retrieval import router as retrieval_router
 from .core.config import Settings, get_settings
 from .core.logging import configure_logging
 from .schemas.common import RootResponse
 from .services.document_service import DocumentService
+from .services.embedding_service import (
+    EmbeddingService,
+    SentenceTransformerEmbeddingService,
+)
+from .services.indexing_service import IndexingService
+from .services.retrieval_service import RetrievalService
+from .storage.chunk_store import ChunkStore
+from .storage.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
-PROJECT_DESCRIPTION = "面向论文与实验记录的知识库与实验助理后端（第二阶段：文档接入基础）。"
+PROJECT_DESCRIPTION = (
+    "面向论文与实验记录的知识库与实验助理后端"
+    "（第三阶段：文本分块与本地向量检索）。"
+)
 
 
-def create_app(custom_settings: Settings | None = None) -> FastAPI:
+def create_app(
+    custom_settings: Settings | None = None,
+    embedding_service: EmbeddingService | None = None,
+) -> FastAPI:
     """创建并配置 FastAPI 应用。"""
     settings = custom_settings or get_settings()
     configure_logging(settings.log_level)
+
+    embedding = embedding_service or SentenceTransformerEmbeddingService(
+        model_path=settings.embedding_model_path,
+        device=settings.embedding_device,
+        normalize=settings.embedding_normalize,
+    )
+    vector_store = VectorStore(settings.vector_store_dir)
+    chunk_store = ChunkStore(settings.chunks_dir)
+    indexing_service = IndexingService(
+        settings=settings,
+        embedding_service=embedding,
+        vector_store=vector_store,
+        chunk_store=chunk_store,
+    )
+    retrieval_service = RetrievalService(
+        settings=settings,
+        embedding_service=embedding,
+        vector_store=vector_store,
+    )
+    document_service = DocumentService(settings)
+    document_service.set_index_cleaner(indexing_service.remove_document_index)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -31,9 +67,12 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
             settings.data_dir,
             settings.documents_dir,
             settings.metadata_dir,
+            settings.chunks_dir,
+            settings.vector_store_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
 
+        indexing_service.reconcile_orphan_chunks()
         logger.info(
             "应用启动: %s v%s (debug=%s, api_prefix=%s)",
             settings.app_name,
@@ -52,10 +91,13 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = settings
-    app.state.document_service = DocumentService(settings)
+    app.state.document_service = document_service
+    app.state.indexing_service = indexing_service
+    app.state.retrieval_service = retrieval_service
 
     app.include_router(health_router, prefix=settings.api_prefix)
     app.include_router(documents_router, prefix=settings.api_prefix)
+    app.include_router(retrieval_router, prefix=settings.api_prefix)
 
     @app.get(
         "/",

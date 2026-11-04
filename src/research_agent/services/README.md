@@ -4,9 +4,12 @@
 
 当前已实现：
 
-- `pdf_service.py`：使用 PyMuPDF 打开 PDF，按页提取文本并保留页码。
-- `metadata_service.py`：在 JSON 元数据与 Pydantic 模型之间转换。
-- `document_service.py`：协调上传校验、流式保存、PDF 解析、元数据写入和删除。
+- `document_service.py`：上传校验、PDF 解析、元数据保存、查询、删除和索引清理回调。
+- `pdf_service.py`：使用 PyMuPDF 按页提取文本。
+- `metadata_service.py`：文档元数据与 Pydantic 模型互转。
+- `chunking_service.py`：页码级纯函数分块，支持自然边界、overlap 和稳定 chunk ID。
+- `embedding_service.py`：可替换 Embedding 接口；本地 sentence-transformers 懒加载。
+- `indexing_service.py`：分块、向量化、chunk JSON、FAISS 索引和删除同步。
+- `retrieval_service.py`：查询向量化、FAISS 检索和引用结果组装。
 
-后续阶段在需求明确后再加入文本分块、检索、实验记录问答和模型编排；
-当前不包含向量检索、RAG、LangChain、LangGraph 或大模型调用。
+当前不包含大模型回答、Agent 工作流、LangChain 或 LangGraph。

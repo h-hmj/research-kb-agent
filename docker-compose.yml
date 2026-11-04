@@ -17,8 +17,18 @@ services:
       MAX_UPLOAD_SIZE_MB: "20"
       DOCUMENTS_DIR: "/app/data/documents"
       METADATA_DIR: "/app/data/metadata"
+      CHUNKS_DIR: "/app/data/chunks"
+      VECTOR_STORE_DIR: "/app/data/vector_store"
+      EMBEDDING_MODEL_PATH: "/app/models/bge-small-zh-v1.5"
+      EMBEDDING_DEVICE: "cpu"
+      EMBEDDING_NORMALIZE: "true"
+      CHUNK_SIZE: "500"
+      CHUNK_OVERLAP: "80"
+      RETRIEVAL_TOP_K: "5"
+      MAX_RETRIEVAL_TEXT_LENGTH: "1000"
     volumes:
       - research_data:/app/data
+      - ./models:/app/models:ro
     healthcheck:
       test:
         - CMD

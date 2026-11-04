@@ -7,14 +7,28 @@ from .documents import (
     DocumentPage,
     DocumentStatus,
     DocumentSummary,
+    IndexStatus,
+)
+from .retrieval import (
+    DocumentChunk,
+    IndexDocumentResponse,
+    RetrievalResult,
+    RetrievalSearchRequest,
+    RetrievalSearchResponse,
 )
 
 __all__ = [
+    "DocumentChunk",
     "DocumentDetail",
     "DocumentListResponse",
     "DocumentPage",
     "DocumentStatus",
     "DocumentSummary",
     "HealthResponse",
+    "IndexDocumentResponse",
+    "IndexStatus",
+    "RetrievalResult",
+    "RetrievalSearchRequest",
+    "RetrievalSearchResponse",
     "RootResponse",
 ]

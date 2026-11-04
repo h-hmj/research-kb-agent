@@ -1,7 +1,7 @@
 """文档上传、解析、查询和删除的协调服务。"""
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final
@@ -74,6 +74,11 @@ class DocumentService:
         self._file_storage = FileStorage(settings.documents_dir)
         self._metadata_service = MetadataService(MetadataStore(settings.metadata_dir))
         self._pdf_service = PDFService()
+        self._index_cleaner: Callable[[str], None] | None = None
+
+    def set_index_cleaner(self, cleaner: Callable[[str], None]) -> None:
+        """注入删除文档时的索引清理回调。"""
+        self._index_cleaner = cleaner
 
     @staticmethod
     def _sanitize_original_filename(filename: str | None) -> str:
@@ -167,6 +172,7 @@ class DocumentService:
             page_count=len(pages),
             created_at=datetime.now(timezone.utc).isoformat(),
             status="processed",
+            index_status="not_indexed",
             pages=pages,
         )
 
@@ -213,7 +219,7 @@ class DocumentService:
         return document
 
     def delete_document(self, document_id: str) -> None:
-        """删除 PDF 与对应元数据；目标路径由 UUID 派生。"""
+        """删除索引、PDF 与元数据；目标路径均由 UUID 派生。"""
         canonical_id = self._canonical_document_id(document_id)
         try:
             document = self._metadata_service.get(canonical_id)
@@ -223,6 +229,9 @@ class DocumentService:
 
         if document is None:
             raise DocumentNotFoundError("文档不存在")
+
+        if self._index_cleaner is not None:
+            self._index_cleaner(canonical_id)
 
         try:
             self._file_storage.delete(canonical_id)

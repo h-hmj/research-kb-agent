@@ -3,7 +3,10 @@ FROM python:3.11-slim
 # 避免生成 .pyc，并让容器日志实时输出。
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    HF_HUB_DISABLE_TELEMETRY=1
 
 WORKDIR /app
 
@@ -18,6 +21,7 @@ COPY src ./src
 RUN groupadd --system --gid 10001 appuser \
     && useradd --system --uid 10001 --gid appuser --create-home appuser \
     && mkdir -p /app/data/documents /app/data/metadata \
+       /app/data/chunks /app/data/vector_store /app/models \
     && chown -R appuser:appuser /app/data
 
 USER appuser

@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 对外服务标识，保持稳定，不随环境变量变化。
@@ -51,6 +51,54 @@ class Settings(BaseSettings):
         default=Path("./data/metadata"),
         description="文档 JSON 元数据的本地保存目录。",
     )
+    chunks_dir: Path = Field(
+        default=Path("./data/chunks"),
+        description="文档分块 JSON 的本地保存目录。",
+    )
+    vector_store_dir: Path = Field(
+        default=Path("./data/vector_store"),
+        description="FAISS 索引和 manifest 的本地保存目录。",
+    )
+    embedding_model_path: Path = Field(
+        default=Path("./models/bge-small-zh-v1.5"),
+        description="本地 sentence-transformers 模型目录。",
+    )
+    embedding_device: str = Field(
+        default="cpu",
+        description="Embedding 推理设备，默认 cpu。",
+    )
+    embedding_normalize: bool = Field(
+        default=True,
+        description="是否对 Embedding 结果做 L2 归一化。",
+    )
+    chunk_size: int = Field(
+        default=500,
+        ge=1,
+        description="单个 chunk 的最大字符数。",
+    )
+    chunk_overlap: int = Field(
+        default=80,
+        ge=0,
+        description="相邻 chunk 的重叠字符数。",
+    )
+    retrieval_top_k: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="默认返回的检索结果数量。",
+    )
+    max_retrieval_text_length: int = Field(
+        default=1000,
+        ge=1,
+        description="检索响应中原文片段的最大字符数。",
+    )
+
+    @model_validator(mode="after")
+    def validate_chunking(self) -> "Settings":
+        """重叠长度必须小于分块长度，否则无法稳定前进。"""
+        if self.chunk_overlap >= self.chunk_size:
+            raise ValueError("CHUNK_OVERLAP 必须小于 CHUNK_SIZE")
+        return self
 
     @field_validator("log_level", mode="before")
     @classmethod
