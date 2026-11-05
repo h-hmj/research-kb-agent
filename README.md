@@ -1,7 +1,7 @@
 # 科研知识库与实验助理 Agent
 
 一个面向论文与实验记录的知识库 Agent 后端。项目采用 FastAPI、Pydantic Settings、
-本地文件存储和 JSON 元数据，按可扩展的分层结构搭建，后续将逐步接入检索和模型编排。
+本地文件存储、FAISS 和本地 LLM，按可扩展的分层结构搭建。
 
 当前已完成：
 
@@ -10,9 +10,11 @@
   页码保留、JSON 元数据管理、文档列表/详情/删除 API。
 - **第三阶段**：页码级分块、本地 Embedding 抽象、FAISS 向量索引、
   索引持久化、检索接口、引用回溯与删除同步。
+- **第四阶段**：证据过滤、本地 OpenAI-compatible LLM 单轮问答、
+  服务端页码级引用、无证据拒答和模型不可用 503。
 
-当前不调用任何外部网络 API，不使用数据库或云端向量库。向量化仅允许从
-本地模型目录加载，代码不会自动下载模型。
+当前不调用任何在线 API，不使用数据库或云端向量库。向量化和 LLM 均只使用
+本机服务或本地模型目录；代码不会自动下载模型，LLM 也不会在启动时被探测。
 
 ## 当前阶段实现范围
 
@@ -55,25 +57,40 @@
 - [x] 模型缺失时索引/检索返回 503，其余文档接口正常工作
 - [x] 使用 FakeEmbedding 执行真实 FAISS 分块、持久化、重建和检索测试
 
-**尚未实现**：OCR、大模型回答、问题改写、流式输出、Agent 工作流、
-LangChain、LangGraph、Web 前端、远程 Embedding API。扫描型 PDF 可以上传，
+### 第四阶段（受控问答与引用）
+
+- [x] 复用第三阶段 FAISS 检索，不绕过向量检索直接读全文
+- [x] 按 `MIN_RETRIEVAL_SCORE` 过滤证据，按 `MIN_EVIDENCE_COUNT` 判断是否回答
+- [x] 证据不足直接返回 `refused`，完全不调用 LLM
+- [x] 证据足够才调用本地 OpenAI-compatible `/chat/completions`
+- [x] System Prompt 只允许依据证据回答，禁止外部知识和虚构引用
+- [x] 服务端从实际送入 LLM 的 evidence 生成引用，不解析模型输出引用
+- [x] 引用包含文档名、文档 ID、页码、chunk 序号、原文前缀和分数
+- [x] LLM 输出固定拒答句时统一转为 `refused` 且清空 citations
+- [x] 模型缺失/LLM 服务不可用时优雅返回 503
+- [x] 使用 FakeLLMService 测试；检索、筛选、拒答、引用流程真实执行
+- [x] 不记录完整问题、证据正文或模型回答到 INFO 日志
+
+**尚未实现**：OCR、LangChain、LangGraph、问题改写、二次检索、多 Agent、
+流式输出、Chat 历史/多轮记忆、Web 前端或在线模型 API。扫描型 PDF 可以上传，
 但没有文字层时提取结果为空，当前不会自动 OCR。
 
-## 第三阶段数据流
+## 第三、四阶段数据流
 
 ```text
 上传 PDF
-  → PyMuPDF 按页提取文本（第二阶段）
+  → PyMuPDF 按页提取文本
   → POST /documents/{id}/index
-  → 单页内分块（500 字符，重叠 80）
-  → 本地 sentence-transformers Embedding（默认 bge-small-zh-v1.5）
-  → FAISS IndexFlatIP + manifest.json
+  → 单页内分块 → 本地 Embedding → FAISS IndexFlatIP
   → POST /retrieval/search
-  → 返回文档名、文档 ID、页码、chunk 序号、原文前缀和分数
+  → POST /qa/ask
+  → 按分数过滤证据 → 证据不足则拒答
+  → 证据足够则调用本地 LLM
+  → 服务端根据实际证据附加 citations
 ```
 
-上传成功后不会自动索引；用户必须显式调用索引接口。索引和检索均不调用
-在线 API，也不会自动下载模型。
+上传成功后不会自动索引；用户必须显式调用索引接口。索引、检索和问答均不调用
+在线 API，也不会自动下载模型。没有证据的问答不会调用 LLM。
 
 ## 项目目录结构
 
@@ -86,6 +103,7 @@ research-agent/
 │       ├── core/
 │       │   ├── __init__.py
 │       │   ├── config.py                 # Settings 与配置校验
+│       │   ├── exceptions.py             # Embedding / LLM 内部异常
 │       │   └── logging.py                # 标准日志初始化
 │       ├── api/
 │       │   ├── __init__.py
@@ -93,12 +111,14 @@ research-agent/
 │       │       ├── __init__.py
 │       │       ├── health.py             # 健康检查
 │       │       ├── documents.py          # 上传/列表/详情/删除/索引
-│       │       └── retrieval.py          # 自然语言检索
+│       │       ├── retrieval.py          # 自然语言检索
+│       │       └── qa.py                 # 单轮问答
 │       ├── schemas/
 │       │   ├── __init__.py
 │       │   ├── common.py                 # 通用响应
 │       │   ├── documents.py              # 文档与 index_status
-│       │   └── retrieval.py              # chunk、索引和检索模型
+│       │   ├── retrieval.py              # chunk、索引和检索模型
+│       │   └── qa.py                     # 问答、证据和引用模型
 │       ├── services/
 │       │   ├── __init__.py
 │       │   ├── README.md
@@ -108,7 +128,10 @@ research-agent/
 │       │   ├── chunking_service.py       # 页码级纯函数分块
 │       │   ├── embedding_service.py      # 本地 Embedding 抽象与实现
 │       │   ├── indexing_service.py       # 索引重建与删除同步
-│       │   └── retrieval_service.py      # 检索结果组装
+│       │   ├── retrieval_service.py      # 检索结果组装
+│       │   ├── llm_service.py            # 本地 OpenAI-compatible LLM
+│       │   ├── citation_service.py       # 服务端引用生成
+│       │   └── qa_service.py             # 证据判断、拒答与问答编排
 │       └── storage/
 │           ├── __init__.py
 │           ├── README.md
@@ -121,7 +144,10 @@ research-agent/
 │   ├── conftest.py                       # 临时目录与应用测试客户端
 │   ├── test_health.py                    # 第一阶段测试
 │   ├── test_documents.py                 # 第二阶段测试
-│   └── test_retrieval.py                 # 第三阶段分块/索引/检索测试
+│   ├── test_retrieval.py                 # 第三阶段分块/索引/检索测试
+│   └── test_qa.py                        # 第四阶段问答/引用/拒答测试
+├── scripts/
+│   └── download_embedding_model.py       # 有网环境模型下载（规避 hf_xet 坑）
 ├── data/                                 # 启动时自动创建，已被 .gitignore 忽略
 │   ├── documents/                        # UUID.pdf
 │   ├── metadata/                         # UUID.json
@@ -205,10 +231,22 @@ python -m pip install -r requirements.txt
 
 ```powershell
 pip install -U huggingface_hub
-python -c "from huggingface_hub import snapshot_download; snapshot_download('BAAI/bge-small-zh-v1.5', local_dir='models/bge-small-zh-v1.5')"
+python scripts/download_embedding_model.py
 ```
 
-上述下载命令只应在有网环境执行；本项目运行代码不会调用它。
+脚本等价于手工执行 `snapshot_download('BAAI/bge-small-zh-v1.5',
+local_dir='models/bge-small-zh-v1.5')`，并额外做了两件事：
+
+- 在导入下载库之前关闭 hf_xet 后端。Windows 上该后端拉取权重会报
+  `xet_get ... os error 5 拒绝访问`，换镜像源无效，走普通 HTTP 才能成功。
+- 把 HF 缓存目录固定为项目内 `.hf-cache`，不写入用户主目录的系统缓存。
+
+可选参数：`--repo` 换模型仓库，`--endpoint https://hf-mirror.com` 走镜像，
+`--local-dir` 换保存目录。默认跳过 `*.bin`/`*.onnx` 等重复权重格式（同份权重
+约 91 MB，`sentence-transformers` 只需要 `model.safetensors`），需要时可加
+`--with-other-weights`。
+
+上述下载脚本只应在有网环境执行；本项目运行代码不会调用它。
 
 默认读取：
 
@@ -224,7 +262,36 @@ python -c "from huggingface_hub import snapshot_download; snapshot_download('BAA
 - 运行库强制 `local_files_only=True`，并设置 Hugging Face 离线环境变量。
 - 测试使用确定性 FakeEmbedding，不加载真实模型，也不需要下载模型。
 
-### 4. 可选：创建本地配置
+### 5. 本地 LLM 准备
+
+第四阶段使用本地 **OpenAI-compatible HTTP 接口**，不引入 OpenAI SDK。
+默认配置兼容 Ollama：
+
+```text
+LLM_BASE_URL=http://127.0.0.1:11434/v1
+LLM_MODEL=qwen2.5:3b-instruct
+LLM_API_KEY=
+```
+
+Ollama 仅作为示例。需要在有网环境由用户自行启动服务并准备模型：
+
+```powershell
+ollama serve
+ollama pull qwen2.5:3b-instruct
+```
+
+项目代码**不会自动下载模型**，也不会在启动时主动请求 LLM 服务。
+只有用户发起有足够证据的问答时，才请求 `POST {LLM_BASE_URL}/chat/completions`。
+
+- `LLM_BASE_URL` 应指向本机、Docker 内部服务或 `host.docker.internal` 的本地服务。
+- `LLM_API_KEY` 为空时不发送 Authorization；非空时发送 Bearer Header。
+- 连接失败、超时、非 2xx、响应 JSON 缺 content 时统一返回 503。
+- LLM 不可用时，有证据的问答返回 503；无证据问题仍正常 `refused`，不调用 LLM。
+- Docker 容器内不能直接使用宿主机的 `127.0.0.1`，Compose 示例使用
+  `host.docker.internal`，可按实际本地服务地址覆盖。
+- 离线学校环境不得把 `LLM_BASE_URL` 指向在线大模型 API。
+
+### 6. 可选：创建本地配置
 
 不创建 `.env` 也可以启动，因为 `Settings` 提供了完整默认值。需要自定义时：
 
@@ -232,9 +299,10 @@ python -c "from huggingface_hub import snapshot_download; snapshot_download('BAA
 Copy-Item .env.example .env
 ```
 
-`.env` 已被 `.gitignore` 忽略，禁止提交任何密钥。当前阶段不需要 API Key。
+`.env` 已被 `.gitignore` 忽略，禁止提交任何密钥。`LLM_API_KEY` 默认为空，
+只有本地服务确实需要鉴权时才设置。
 
-### 5. 启动服务
+### 7. 启动服务
 
 ```powershell
 uvicorn src.research_agent.main:app --reload --host 127.0.0.1 --port 8000
@@ -265,7 +333,7 @@ data/vector_store/
 应用启动: 科研知识库与实验助理 Agent v0.1.0 (debug=False, api_prefix=/api/v1)
 ```
 
-### 6. 运行测试
+### 8. 运行测试
 
 ```powershell
 python -m pytest
@@ -280,12 +348,12 @@ python -m pytest -vv -s
 测试使用 `httpx.AsyncClient` + `ASGITransport`，通过 AnyIO 的 asyncio 后端运行，
 不创建真实测试服务器，也不访问外部服务。测试中的应用配置会把 PDF、元数据、
 chunk 和向量索引写入 pytest 临时目录。第三阶段使用 FakeEmbeddingService，
-但 FAISS 的写入、持久化、重载、重建和检索逻辑都是真实执行的。
+第四阶段额外注入 FakeLLMService；FAISS 检索、证据过滤、拒答和引用逻辑真实执行。
 
 预期结果（具体以实际执行为准）：
 
 ```text
-44 passed
+60 passed
 ```
 
 ## 数据目录说明
@@ -370,6 +438,17 @@ data/
 | `CHUNK_OVERLAP` | `80` | 相邻 chunk 重叠字符数，必须小于 `CHUNK_SIZE` |
 | `RETRIEVAL_TOP_K` | `5` | 默认检索返回数量，最大 20 |
 | `MAX_RETRIEVAL_TEXT_LENGTH` | `1000` | 返回原文片段最大长度 |
+| `QA_TOP_K` | `5` | 问答默认检索数量，最大 20 |
+| `MIN_RETRIEVAL_SCORE` | `0.35` | 进入证据集的最低相似度 |
+| `MIN_EVIDENCE_COUNT` | `1` | 调用 LLM 的最少证据数量 |
+| `MAX_CONTEXT_CHARS` | `6000` | 送入 LLM 的证据文本总上限 |
+| `MAX_CITATION_TEXT_LENGTH` | `500` | 引用原文最大长度 |
+| `LLM_BASE_URL` | `http://127.0.0.1:11434/v1` | 本地 OpenAI-compatible 服务 |
+| `LLM_MODEL` | `qwen2.5:3b-instruct` | 本地模型名 |
+| `LLM_API_KEY` | 空 | 仅本地服务需要时设置 |
+| `LLM_TIMEOUT_SECONDS` | `60` | 调用超时 |
+| `LLM_TEMPERATURE` | `0.0` | 生成温度 |
+| `LLM_MAX_TOKENS` | `512` | 最大输出 token |
 
 示例：
 
@@ -383,6 +462,10 @@ $env:VECTOR_STORE_DIR = "./data/vector_store"
 $env:EMBEDDING_MODEL_PATH = "./models/bge-small-zh-v1.5"
 $env:CHUNK_SIZE = "500"
 $env:CHUNK_OVERLAP = "80"
+$env:QA_TOP_K = "5"
+$env:MIN_RETRIEVAL_SCORE = "0.35"
+$env:LLM_BASE_URL = "http://127.0.0.1:11434/v1"
+$env:LLM_MODEL = "qwen2.5:3b-instruct"
 uvicorn src.research_agent.main:app --reload --port 8000
 ```
 
@@ -404,7 +487,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/ | ConvertTo-Json
 {
   "name": "科研知识库与实验助理 Agent",
   "version": "0.1.0",
-  "description": "面向论文与实验记录的知识库与实验助理后端（第三阶段：文本分块与本地向量检索）。"
+  "description": "面向论文与实验记录的知识库与实验助理后端（第四阶段：本地 LLM 问答与可追溯引用）。"
 }
 ```
 
@@ -571,6 +654,71 @@ Invoke-RestMethod `
 `200` 和空 `results`。`MAX_RETRIEVAL_TEXT_LENGTH` 只截断返回文本的前缀，
 不改变页码、chunk ID 和分数。
 
+### 单轮问答
+
+```powershell
+$body = @{
+    question = "实验中为什么要设置空白对照？"
+    top_k = 5
+} | ConvertTo-Json -Depth 4
+
+Invoke-RestMethod `
+    -Uri "http://127.0.0.1:8000/api/v1/qa/ask" `
+    -Method Post `
+    -ContentType "application/json" `
+    -Body $body
+```
+
+有足够证据时返回：
+
+```json
+{
+  "status": "answered",
+  "answer": "根据资料，设置空白对照可用于……",
+  "citations": [
+    {
+      "citation_id": "citation-1",
+      "chunk_id": "uuid:p2:c0",
+      "document_id": "uuid",
+      "original_filename": "experiment.pdf",
+      "page_number": 2,
+      "chunk_index": 0,
+      "text": "原文片段……",
+      "char_start": 0,
+      "char_end": 300,
+      "score": 0.83
+    }
+  ],
+  "retrieval": {
+    "query": "实验中为什么要设置空白对照？",
+    "retrieved_count": 3,
+    "evidence_count": 2,
+    "top_k": 5
+  },
+  "refusal_reason": null
+}
+```
+
+没有足够证据时，接口仍返回 200，但不调用 LLM：
+
+```json
+{
+  "status": "refused",
+  "answer": "无法根据已检索到的资料回答该问题。",
+  "citations": [],
+  "retrieval": {
+    "query": "不存在的问题",
+    "retrieved_count": 0,
+    "evidence_count": 0,
+    "top_k": 5
+  },
+  "refusal_reason": "未检索到足够相关的文档证据。"
+}
+```
+
+引用完全由服务端根据实际送入 LLM 的证据块生成，不解析模型回答中的引用。
+模型如果输出固定拒答句，也会被统一转换为 `refused` 且 citations 为空。
+
 ### 查询文档列表
 
 ```powershell
@@ -665,9 +813,9 @@ manifest 中该文档的全部记录
 | `400` | 文件名为空、非 PDF、Content-Type 非 PDF、PDF 损坏或无法解析 |
 | `413` | 文件超过大小限制 |
 | `404` | 文档不存在或文档 ID 非法 |
-| `422` | multipart 请求缺少文件字段、分页参数非法、query 为空等 |
+| `422` | multipart 缺文件、分页参数非法、query 为空、question/top_k 非法 |
 | `500` | 本地文件、元数据或 FAISS 索引读写失败，不返回服务器绝对路径 |
-| `503` | 本地 Embedding 模型缺失、加载失败或推理失败 |
+| `503` | 本地 Embedding 模型或本地 LLM 服务不可用 |
 
 错误响应统一使用：
 
@@ -715,14 +863,29 @@ manifest 中该文档的全部记录
 - 空 query 拒绝
 - FakeEmbedding 替代真实模型，但真实执行 FAISS 写入、重载、重建和检索
 
+第四阶段新增 16 个测试，测试覆盖：
+
+- 有证据回答、LLM 只调用一次、引用字段和来源正确
+- 引用去重并按分数降序
+- 无索引、低分、证据数不足时拒答且不调用 LLM
+- LLM 输出固定拒答句时归一化为 refused
+- Embedding 不可用、LLM 不可用分别返回 503
+- 无证据且 LLM 不可用时仍返回 200 refused
+- 空问题、纯空白、超长问题、非法 top_k/document_ids 返回 422
+- document_ids 严格过滤，未索引文档不参与问答
+- 上下文长度限制、引用文本前缀限制
+- Prompt 只包含实际筛选出的 evidence
+- FakeLLM 替代真实模型，但检索、筛选、拒答和引用流程真实执行
+
 完整运行：
 
 ```powershell
 python -m pytest -vv -s
 ```
 
-当前环境没有下载真实模型，因此**真实模型推理未验证**；模型缺失时的 503
-路径有自动化测试覆盖。
+真实 Embedding 与 LLM 不随仓库提交，自动化测试使用 FakeEmbedding/FakeLLM；
+真实模型/服务需要按上面的步骤在本地准备，因此不纳入 pytest 测试依赖。
+模型/LLM 不可用 503 路径和完整问答编排已由自动化测试覆盖。
 
 ## Docker 启动
 
@@ -755,7 +918,12 @@ docker compose down
 容器内使用 Uvicorn 监听 `0.0.0.0:8000`，宿主机映射到 `8000`。
 `docker-compose.yml` 使用命名卷 `research_data` 挂载 `/app/data`，
 PDF、元数据、chunk 和 FAISS 索引在容器重建后仍可保留；同时以只读方式
-挂载 `./models:/app/models`，容器不会下载模型。服务不依赖外部数据库或外部 API。
+挂载 `./models:/app/models`，容器不会下载模型。服务不依赖外部数据库或在线 API。
+
+第四阶段通过环境变量覆盖 `QA_TOP_K`、`MIN_RETRIEVAL_SCORE`、`LLM_BASE_URL`、
+`LLM_MODEL` 等配置。Compose 默认把 `LLM_BASE_URL` 设为
+`http://host.docker.internal:11434/v1`，便于容器访问宿主机 Ollama；
+如使用 Docker 内部服务名，可自行覆盖。`LLM_API_KEY` 默认为空。
 
 如果当前环境无法执行 Docker，可先验证 Compose 配置语法：
 
@@ -778,15 +946,21 @@ docker compose config
 - Embedding 模型只能从本地目录加载，并强制离线模式，不自动下载。
 - FAISS 索引和 manifest 通过临时文件原子替换；索引操作使用进程内锁。
 - 删除文档会重建索引并移除对应向量，再删除 chunk 文件。
+- 问答只允许使用经过分数过滤且实际送入 LLM 的证据，不允许绕过向量检索读全文。
+- 引用由 `CitationService` 从 evidence 生成，不解析模型输出中的引用。
+- LLM 调用只在证据足够时发生；启动时不探测 LLM 服务。
+- INFO 日志只记录 request id、检索/证据数量、状态和耗时，不记录问题或证据正文。
 - 单机 JSON + FAISS 仅面向课程项目的小规模知识库，不适合多实例并发写入。
 
 ## 已知限制
 
 - 扫描型 PDF 没有文字层时 chunk 为空，当前不支持 OCR。
-- 真实 Embedding 模型未随仓库提供；当前环境没有下载模型，真实模型推理未验证。
-- 无模型或模型加载失败时 index/search 返回 503；上传和文档管理仍可用。
+- 真实 Embedding 模型不随仓库提交，需要按准备步骤在本地下载。
+- 真实 LLM 回答依赖本机 Ollama 服务和 `LLM_MODEL` 配置，不纳入自动化测试。
+- 无 Embedding 模型时索引/检索/问答返回 503；上传和文档管理仍可用。
+- LLM 不可用时，有证据问答返回 503；无证据问题仍返回 200 refused，不调用 LLM。
 - 本地 JSON + FAISS 是单机小规模方案，不适合多进程并发写入或大规模语料。
-- 当前只返回检索片段，不生成大模型回答，也没有问题改写、流式输出或 Agent 工作流。
+- 没有问题改写、二次检索、流式输出、多轮记忆、LangGraph 或 Agent 工作流。
 - Docker 镜像未在本环境实际构建，因 Docker Desktop 引擎未启动；仅验证了 Compose 语法。
 
 ## 第二阶段验收标准
@@ -815,22 +989,34 @@ docker compose config
 - [x] 不依赖外网或在线 API，不自动下载模型
 - [x] README 与代码、配置和 Docker 挂载一致
 
-## 第四阶段计划
+## 第四阶段验收标准
 
-1. 检索质量增强
-   - chunk 参数实验与召回评估
-   - 混合检索、重排或过滤策略
-   - 检索测试集和引用准确率指标
-2. 文档管理增强
-   - 索引状态失败记录与可重试任务
-   - 文档标签、摘要和批量索引
-3. Agent 能力
-   - 在需求明确后再引入大模型回答、LangGraph 或 Agent 工作流
-   - 回答必须基于检索结果并附带页码引用
-   - 密钥仅从环境变量读取
-4. 工程化
+- [x] 前三个阶段 44 个测试仍然全部通过
+- [x] 第四阶段新增 16 个测试全部通过，总计 60 passed
+- [x] 有足够证据时返回 answered，回答带服务端页码级引用
+- [x] 引用来自实际送入 LLM 的 evidence，不解析模型虚构引用
+- [x] 无索引、低分或证据不足时返回 200 refused，且不调用 LLM
+- [x] LLM 输出固定拒答句时归一化为 refused，citations 为空
+- [x] Embedding 不可用、证据足够但 LLM 不可用时返回 503
+- [x] 无证据且 LLM 不可用时仍正常 refused
+- [x] 空问题、超长问题、非法 top_k/document_ids 返回 422
+- [x] document_ids 过滤和未索引文档隔离生效
+- [x] Prompt 只包含筛选后的 evidence，上下文和引用文本有长度上限
+- [x] 不自动下载模型，不调用在线 API，未引入 LangGraph
+
+## 第五阶段计划
+
+1. 检索与问答质量
+   - chunk 参数、相似度阈值和 top_k 的评测
+   - 检索召回率、引用准确率和拒答准确率测试集
+   - 真实本地 Embedding 与 LLM 的端到端验证
+2. 问答能力增强
+   - 在明确需求后再考虑多轮对话、问题改写或二次检索
+   - 更严格的证据冲突处理和回答格式约束
+3. 工程化
    - 增加 Ruff、mypy、覆盖率和 CI
    - Docker 镜像构建、模型挂载和容器接口回归验证
+   - 本地 LLM 健康状态的安全摘要接口（可选）
 
-当前仍未实现 OCR、大模型回答、问题改写、流式输出、LangChain、LangGraph
-或 Agent 工作流。
+当前仍未实现 OCR、LangGraph、问题改写、二次检索、多 Agent、流式输出、
+Chat 历史/多轮记忆或 Web 前端。

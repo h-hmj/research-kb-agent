@@ -10,15 +10,13 @@ from typing import Any, Protocol
 
 import numpy as np
 
+from ..core.exceptions import EmbeddingModelUnavailableError
+
 logger = logging.getLogger(__name__)
 
 EMBEDDING_UNAVAILABLE_DETAIL = (
     "本地 Embedding 模型不可用，请检查 EMBEDDING_MODEL_PATH 配置和模型文件。"
 )
-
-
-class EmbeddingModelUnavailableError(Exception):
-    """本地模型缺失、加载失败或推理失败。"""
 
 
 class EmbeddingService(Protocol):

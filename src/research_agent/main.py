@@ -9,16 +9,20 @@ from fastapi.responses import JSONResponse
 
 from .api.routes.documents import router as documents_router
 from .api.routes.health import router as health_router
+from .api.routes.qa import router as qa_router
 from .api.routes.retrieval import router as retrieval_router
 from .core.config import Settings, get_settings
 from .core.logging import configure_logging
 from .schemas.common import RootResponse
+from .services.citation_service import CitationService
 from .services.document_service import DocumentService
 from .services.embedding_service import (
     EmbeddingService,
     SentenceTransformerEmbeddingService,
 )
 from .services.indexing_service import IndexingService
+from .services.llm_service import LLMService, OpenAICompatibleLLMService
+from .services.qa_service import QAService
 from .services.retrieval_service import RetrievalService
 from .storage.chunk_store import ChunkStore
 from .storage.vector_store import VectorStore
@@ -27,13 +31,14 @@ logger = logging.getLogger(__name__)
 
 PROJECT_DESCRIPTION = (
     "面向论文与实验记录的知识库与实验助理后端"
-    "（第三阶段：文本分块与本地向量检索）。"
+    "（第四阶段：本地 LLM 问答与可追溯引用）。"
 )
 
 
 def create_app(
     custom_settings: Settings | None = None,
     embedding_service: EmbeddingService | None = None,
+    llm_service: LLMService | None = None,
 ) -> FastAPI:
     """创建并配置 FastAPI 应用。"""
     settings = custom_settings or get_settings()
@@ -56,6 +61,22 @@ def create_app(
         settings=settings,
         embedding_service=embedding,
         vector_store=vector_store,
+    )
+    llm = llm_service or OpenAICompatibleLLMService(
+        base_url=settings.llm_base_url,
+        model=settings.llm_model,
+        api_key=settings.llm_api_key,
+        timeout_seconds=settings.llm_timeout_seconds,
+        temperature=settings.llm_temperature,
+        max_tokens=settings.llm_max_tokens,
+    )
+    qa_service = QAService(
+        settings=settings,
+        retrieval_service=retrieval_service,
+        llm_service=llm,
+        citation_service=CitationService(
+            max_text_length=settings.max_citation_text_length
+        ),
     )
     document_service = DocumentService(settings)
     document_service.set_index_cleaner(indexing_service.remove_document_index)
@@ -94,10 +115,12 @@ def create_app(
     app.state.document_service = document_service
     app.state.indexing_service = indexing_service
     app.state.retrieval_service = retrieval_service
+    app.state.qa_service = qa_service
 
     app.include_router(health_router, prefix=settings.api_prefix)
     app.include_router(documents_router, prefix=settings.api_prefix)
     app.include_router(retrieval_router, prefix=settings.api_prefix)
+    app.include_router(qa_router, prefix=settings.api_prefix)
 
     @app.get(
         "/",

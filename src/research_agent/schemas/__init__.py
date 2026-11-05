@@ -9,6 +9,14 @@ from .documents import (
     DocumentSummary,
     IndexStatus,
 )
+from .qa import (
+    EvidenceChunk,
+    QACitation,
+    QARequest,
+    QAResponse,
+    QARetrievalInfo,
+    QAStatus,
+)
 from .retrieval import (
     DocumentChunk,
     IndexDocumentResponse,
@@ -24,9 +32,15 @@ __all__ = [
     "DocumentPage",
     "DocumentStatus",
     "DocumentSummary",
+    "EvidenceChunk",
     "HealthResponse",
     "IndexDocumentResponse",
     "IndexStatus",
+    "QACitation",
+    "QARequest",
+    "QAResponse",
+    "QARetrievalInfo",
+    "QAStatus",
     "RetrievalResult",
     "RetrievalSearchRequest",
     "RetrievalSearchResponse",

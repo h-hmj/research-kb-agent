@@ -26,9 +26,22 @@ services:
       CHUNK_OVERLAP: "80"
       RETRIEVAL_TOP_K: "5"
       MAX_RETRIEVAL_TEXT_LENGTH: "1000"
+      QA_TOP_K: "${QA_TOP_K:-5}"
+      MIN_RETRIEVAL_SCORE: "${MIN_RETRIEVAL_SCORE:-0.35}"
+      MIN_EVIDENCE_COUNT: "${MIN_EVIDENCE_COUNT:-1}"
+      MAX_CONTEXT_CHARS: "${MAX_CONTEXT_CHARS:-6000}"
+      MAX_CITATION_TEXT_LENGTH: "${MAX_CITATION_TEXT_LENGTH:-500}"
+      LLM_BASE_URL: "${LLM_BASE_URL:-http://host.docker.internal:11434/v1}"
+      LLM_MODEL: "${LLM_MODEL:-qwen2.5:3b-instruct}"
+      LLM_API_KEY: "${LLM_API_KEY:-}"
+      LLM_TIMEOUT_SECONDS: "${LLM_TIMEOUT_SECONDS:-60}"
+      LLM_TEMPERATURE: "${LLM_TEMPERATURE:-0.0}"
+      LLM_MAX_TOKENS: "${LLM_MAX_TOKENS:-512}"
     volumes:
       - research_data:/app/data
       - ./models:/app/models:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test:
         - CMD

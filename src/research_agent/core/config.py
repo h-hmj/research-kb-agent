@@ -92,6 +92,61 @@ class Settings(BaseSettings):
         ge=1,
         description="检索响应中原文片段的最大字符数。",
     )
+    qa_top_k: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="问答默认检索数量。",
+    )
+    min_retrieval_score: float = Field(
+        default=0.35,
+        ge=0.0,
+        le=1.0,
+        description="进入问答证据集的最低相似度。",
+    )
+    min_evidence_count: int = Field(
+        default=1,
+        ge=1,
+        description="允许调用 LLM 的最少证据数量。",
+    )
+    max_context_chars: int = Field(
+        default=6000,
+        ge=1,
+        description="送入 LLM 的证据文本总字符上限。",
+    )
+    max_citation_text_length: int = Field(
+        default=500,
+        ge=1,
+        description="引用原文片段的最大字符数。",
+    )
+    llm_base_url: str = Field(
+        default="http://127.0.0.1:11434/v1",
+        description="本地 OpenAI-compatible LLM 服务地址。",
+    )
+    llm_model: str = Field(
+        default="qwen2.5:3b-instruct",
+        description="本地 LLM 模型名。",
+    )
+    llm_api_key: str = Field(
+        default="",
+        description="本地 LLM 可选 API Key，默认空。",
+    )
+    llm_timeout_seconds: float = Field(
+        default=60.0,
+        ge=1.0,
+        description="调用本地 LLM 的超时时间。",
+    )
+    llm_temperature: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=2.0,
+        description="LLM 温度。",
+    )
+    llm_max_tokens: int = Field(
+        default=512,
+        ge=1,
+        description="LLM 最大输出 token 数。",
+    )
 
     @model_validator(mode="after")
     def validate_chunking(self) -> "Settings":

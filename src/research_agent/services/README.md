@@ -11,5 +11,8 @@
 - `embedding_service.py`：可替换 Embedding 接口；本地 sentence-transformers 懒加载。
 - `indexing_service.py`：分块、向量化、chunk JSON、FAISS 索引和删除同步。
 - `retrieval_service.py`：查询向量化、FAISS 检索和引用结果组装。
+- `llm_service.py`：本地 OpenAI-compatible LLM Provider 和受控 Prompt。
+- `citation_service.py`：只根据实际 evidence 生成服务端引用。
+- `qa_service.py`：证据过滤、拒答、LLM 调用和引用编排。
 
-当前不包含大模型回答、Agent 工作流、LangChain 或 LangGraph。
+当前不包含 LangGraph、问题改写、二次检索、多轮对话或 Agent 工作流。
