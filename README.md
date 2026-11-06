@@ -12,6 +12,8 @@
   索引持久化、检索接口、引用回溯与删除同步。
 - **第四阶段**：证据过滤、本地 OpenAI-compatible LLM 单轮问答、
   服务端页码级引用、无证据拒答和模型不可用 503。
+- **第五阶段**：LangGraph StateGraph、初次检索、证据判断、
+  最多一次问题改写和二次检索、最终回答或明确拒答。
 
 当前不调用任何在线 API，不使用数据库或云端向量库。向量化和 LLM 均只使用
 本机服务或本地模型目录；代码不会自动下载模型，LLM 也不会在启动时被探测。
@@ -71,11 +73,25 @@
 - [x] 使用 FakeLLMService 测试；检索、筛选、拒答、引用流程真实执行
 - [x] 不记录完整问题、证据正文或模型回答到 INFO 日志
 
-**尚未实现**：OCR、LangChain、LangGraph、问题改写、二次检索、多 Agent、
-流式输出、Chat 历史/多轮记忆、Web 前端或在线模型 API。扫描型 PDF 可以上传，
-但没有文字层时提取结果为空，当前不会自动 OCR。
+### 第五阶段（LangGraph 改写工作流）
 
-## 第三、四阶段数据流
+- [x] 使用真实 `langgraph.graph.StateGraph`、节点和条件边
+- [x] `POST /api/v1/agent/ask` 单轮 Agent 接口，旧 `/qa/ask` 保持不变
+- [x] 初次检索 → 证据判断 → 回答 / 改写 / 拒答
+- [x] 仅在初次证据不足且允许改写时执行一次问题改写
+- [x] 二次检索使用相同 `document_ids` 和 `top_k`，不扩大范围
+- [x] 最多一次改写、最多一次二次检索，图带递归上限
+- [x] 二次检索仍不足时明确拒答，不进行第三次检索
+- [x] 改写 LLM 失败或输出非法时正常拒答，HTTP 保持 200
+- [x] 回答复用第四阶段证据过滤、LLM 和引用生成逻辑
+- [x] 返回安全 `workflow` 摘要，不暴露 Prompt、思维链或模型原始响应
+- [x] 使用 FakeEmbedding/FakeLLM + 真实 FAISS + 真实 LangGraph 编排测试
+
+**尚未实现**：OCR、LangChain 业务抽象、多轮对话、流式输出、多 Agent、
+工具调用、Web 前端或在线模型 API。扫描型 PDF 可以上传，但没有文字层时
+提取结果为空，当前不会自动 OCR。
+
+## 第三、四、五阶段数据流
 
 ```text
 上传 PDF
@@ -83,14 +99,25 @@
   → POST /documents/{id}/index
   → 单页内分块 → 本地 Embedding → FAISS IndexFlatIP
   → POST /retrieval/search
-  → POST /qa/ask
-  → 按分数过滤证据 → 证据不足则拒答
-  → 证据足够则调用本地 LLM
-  → 服务端根据实际证据附加 citations
+  → POST /qa/ask（单次检索问答）
+  → 证据足够 → 本地 LLM → 服务端 citations
+  → 证据不足 → refused
+
+Agent 工作流（POST /agent/ask）：
+用户问题
+  → 初次检索
+  → 证据判断
+  ├─ 证据充分 → 回答并返回引用
+  └─ 证据不足 → 问题改写 → 二次检索
+                       ├─ 证据充分 → 回答并返回引用
+                       └─ 仍不足 → 明确拒答
 ```
 
 上传成功后不会自动索引；用户必须显式调用索引接口。索引、检索和问答均不调用
 在线 API，也不会自动下载模型。没有证据的问答不会调用 LLM。
+
+Agent 最多进行一次问题改写和一次二次检索，图不会回到改写节点，也不允许
+第三次检索。设置递归上限是为了防止编排错误导致无限循环。
 
 ## 项目目录结构
 
@@ -103,8 +130,13 @@ research-agent/
 │       ├── core/
 │       │   ├── __init__.py
 │       │   ├── config.py                 # Settings 与配置校验
-│       │   ├── exceptions.py             # Embedding / LLM 内部异常
+│       │   ├── exceptions.py             # Embedding / LLM / 改写异常
 │       │   └── logging.py                # 标准日志初始化
+│       ├── agents/
+│       │   ├── __init__.py
+│       │   ├── state.py                  # 显式 Graph State
+│       │   ├── nodes.py                  # 检索/判断/改写/回答/拒答节点
+│       │   └── research_graph.py         # StateGraph 构建与条件边
 │       ├── api/
 │       │   ├── __init__.py
 │       │   └── routes/
@@ -112,13 +144,15 @@ research-agent/
 │       │       ├── health.py             # 健康检查
 │       │       ├── documents.py          # 上传/列表/详情/删除/索引
 │       │       ├── retrieval.py          # 自然语言检索
-│       │       └── qa.py                 # 单轮问答
+│       │       ├── qa.py                 # 单轮问答
+│       │       └── agent.py              # LangGraph Agent 接口
 │       ├── schemas/
 │       │   ├── __init__.py
 │       │   ├── common.py                 # 通用响应
 │       │   ├── documents.py              # 文档与 index_status
 │       │   ├── retrieval.py              # chunk、索引和检索模型
-│       │   └── qa.py                     # 问答、证据和引用模型
+│       │   ├── qa.py                     # 问答、证据和引用模型
+│       │   └── agent.py                  # Agent 请求、流程摘要和响应
 │       ├── services/
 │       │   ├── __init__.py
 │       │   ├── README.md
@@ -131,7 +165,9 @@ research-agent/
 │       │   ├── retrieval_service.py      # 检索结果组装
 │       │   ├── llm_service.py            # 本地 OpenAI-compatible LLM
 │       │   ├── citation_service.py       # 服务端引用生成
-│       │   └── qa_service.py             # 证据判断、拒答与问答编排
+│       │   ├── qa_service.py             # 证据判断、拒答与问答编排
+│       │   ├── query_rewrite_service.py  # LLM 问题改写与输出校验
+│       │   └── agent_service.py          # LangGraph 入口和安全摘要
 │       └── storage/
 │           ├── __init__.py
 │           ├── README.md
@@ -145,7 +181,8 @@ research-agent/
 │   ├── test_health.py                    # 第一阶段测试
 │   ├── test_documents.py                 # 第二阶段测试
 │   ├── test_retrieval.py                 # 第三阶段分块/索引/检索测试
-│   └── test_qa.py                        # 第四阶段问答/引用/拒答测试
+│   ├── test_qa.py                        # 第四阶段问答/引用/拒答测试
+│   └── test_agent.py                     # 第五阶段 LangGraph 工作流测试
 ├── scripts/
 │   └── download_embedding_model.py       # 有网环境模型下载（规避 hf_xet 坑）
 ├── data/                                 # 启动时自动创建，已被 .gitignore 忽略
@@ -224,6 +261,7 @@ python -m pip install -r requirements.txt
 - `numpy`：Embedding 向量与数值处理
 - `faiss-cpu`：本地向量索引（`IndexFlatIP`）
 - `sentence-transformers`：从本地目录加载 Embedding 模型
+- `langgraph`：第五阶段 StateGraph 工作流（`langchain-core` 仅作为其依赖带入，业务代码不依赖 LangChain 抽象）
 
 ### 4. 本地 Embedding 模型准备
 
@@ -348,12 +386,13 @@ python -m pytest -vv -s
 测试使用 `httpx.AsyncClient` + `ASGITransport`，通过 AnyIO 的 asyncio 后端运行，
 不创建真实测试服务器，也不访问外部服务。测试中的应用配置会把 PDF、元数据、
 chunk 和向量索引写入 pytest 临时目录。第三阶段使用 FakeEmbeddingService，
-第四阶段额外注入 FakeLLMService；FAISS 检索、证据过滤、拒答和引用逻辑真实执行。
+第四阶段额外注入 FakeLLMService；第五阶段使用真实 FAISS、真实 LangGraph
+StateGraph，仅推理模型用 Fake 替代。
 
 预期结果（具体以实际执行为准）：
 
 ```text
-60 passed
+86 passed
 ```
 
 ## 数据目录说明
@@ -449,6 +488,12 @@ data/
 | `LLM_TIMEOUT_SECONDS` | `60` | 调用超时 |
 | `LLM_TEMPERATURE` | `0.0` | 生成温度 |
 | `LLM_MAX_TOKENS` | `512` | 最大输出 token |
+| `ENABLE_QUERY_REWRITE` | `true` | 全局是否允许问题改写 |
+| `MAX_QUERY_REWRITE_ATTEMPTS` | `1` | 只允许 0 或 1 |
+| `REWRITE_MAX_CHARS` | `500` | 改写查询最大字符数 |
+| `AGENT_TOP_K` | `5` | Agent 默认检索数量，最大 20 |
+| `AGENT_MAX_CONTEXT_CHARS` | `6000` | Agent 证据文本总上限 |
+| `AGENT_TRACE_ENABLED` | `true` | 是否返回安全工作流摘要 |
 
 示例：
 
@@ -466,6 +511,9 @@ $env:QA_TOP_K = "5"
 $env:MIN_RETRIEVAL_SCORE = "0.35"
 $env:LLM_BASE_URL = "http://127.0.0.1:11434/v1"
 $env:LLM_MODEL = "qwen2.5:3b-instruct"
+$env:ENABLE_QUERY_REWRITE = "true"
+$env:MAX_QUERY_REWRITE_ATTEMPTS = "1"
+$env:AGENT_TOP_K = "5"
 uvicorn src.research_agent.main:app --reload --port 8000
 ```
 
@@ -487,7 +535,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/ | ConvertTo-Json
 {
   "name": "科研知识库与实验助理 Agent",
   "version": "0.1.0",
-  "description": "面向论文与实验记录的知识库与实验助理后端（第四阶段：本地 LLM 问答与可追溯引用）。"
+  "description": "面向论文与实验记录的知识库与实验助理后端（第五阶段：LangGraph 问题改写与二次检索）。"
 }
 ```
 
@@ -719,6 +767,105 @@ Invoke-RestMethod `
 引用完全由服务端根据实际送入 LLM 的证据块生成，不解析模型回答中的引用。
 模型如果输出固定拒答句，也会被统一转换为 `refused` 且 citations 为空。
 
+### LangGraph Agent 问答
+
+旧 `qa/ask` 只检索一次；`agent/ask` 在初次证据不足时最多改写一次并二次检索。
+
+```powershell
+$body = @{
+    question = "实验中为什么要设置空白对照？"
+    top_k = 5
+    enable_rewrite = $true
+} | ConvertTo-Json -Depth 4
+
+Invoke-RestMethod `
+    -Uri "http://127.0.0.1:8000/api/v1/agent/ask" `
+    -Method Post `
+    -ContentType "application/json" `
+    -Body $body
+```
+
+有足够证据时返回：
+
+```json
+{
+  "status": "answered",
+  "answer": "根据资料，空白对照用于……",
+  "citations": [
+    {
+      "citation_id": "citation-1",
+      "chunk_id": "uuid:p2:c0",
+      "document_id": "uuid",
+      "original_filename": "experiment.pdf",
+      "page_number": 2,
+      "chunk_index": 0,
+      "text": "原文片段……",
+      "char_start": 0,
+      "char_end": 300,
+      "score": 0.83
+    }
+  ],
+  "workflow": {
+    "original_question": "实验中为什么要设置空白对照？",
+    "final_query": "实验 空白对照 作用",
+    "rewrite_attempted": true,
+    "rewrite_count": 1,
+    "rewrite_changed": true,
+    "steps": [
+      "retrieve_initial",
+      "assess_initial_evidence",
+      "rewrite_query",
+      "retrieve_retry",
+      "assess_retry_evidence",
+      "answer"
+    ],
+    "initial_retrieval_count": 0,
+    "final_retrieval_count": 2,
+    "evidence_count": 2
+  },
+  "refusal_reason": null
+}
+```
+
+二次检索仍不足时返回 HTTP 200：
+
+```json
+{
+  "status": "refused",
+  "answer": "无法根据已检索到的资料回答该问题。",
+  "citations": [],
+  "workflow": {
+    "original_question": "不存在的问题",
+    "final_query": "改写后的查询",
+    "rewrite_attempted": true,
+    "rewrite_count": 1,
+    "rewrite_changed": true,
+    "steps": [
+      "retrieve_initial",
+      "assess_initial_evidence",
+      "rewrite_query",
+      "retrieve_retry",
+      "assess_retry_evidence",
+      "refuse"
+    ],
+    "initial_retrieval_count": 0,
+    "final_retrieval_count": 0,
+    "evidence_count": 0
+  },
+  "refusal_reason": "经过问题改写和二次检索后，仍未检索到足够相关的文档证据。"
+}
+```
+
+`enable_rewrite=false` 或全局 `ENABLE_QUERY_REWRITE=false` 时直接拒答，不调用
+改写 LLM。`MAX_QUERY_REWRITE_ATTEMPTS` 只能是 0 或 1，请求不能覆盖。
+改写服务不可用或输出为空、过长、Markdown/JSON、拒答句时，也直接拒答，
+不再二次检索。工作流 `steps` 只是安全节点名，不包含 Prompt 或思维链。
+
+| 接口 | 检索次数 | 问题改写 | 用途 |
+| --- | --- | --- | --- |
+| `/api/v1/qa/ask` | 1 | 否 | 第四阶段单轮问答 |
+| `/api/v1/agent/ask` | 1 或 2 | 最多 1 次 | LangGraph 检索增强工作流 |
+
 ### 查询文档列表
 
 ```powershell
@@ -877,6 +1024,21 @@ manifest 中该文档的全部记录
 - Prompt 只包含实际筛选出的 evidence
 - FakeLLM 替代真实模型，但检索、筛选、拒答和引用流程真实执行
 
+第五阶段新增 26 个测试，测试覆盖：
+
+- 真实 `CompiledStateGraph` 和图节点实际存在
+- 初次证据充分时只检索一次、不改写、只调用回答 LLM 一次
+- 初次不足时改写一次、二次检索一次并回答
+- 两次都不足时拒答，citations 为空，不调用回答 LLM
+- 全局/请求开关和 `MAX_QUERY_REWRITE_ATTEMPTS=0` 禁止改写
+- 改写 LLM 不可用、输出为空/过长/Markdown/JSON/拒答句时正常拒答
+- Embedding 不可用、回答 LLM 不可用分别返回 503
+- `document_ids` 在两次检索中严格生效，未索引文档不参与
+- `top_k`、引用去重排序、最终查询和工作流摘要
+- 回答模型固定拒答时不再触发改写
+- 连续请求 state 隔离
+- 未知字段（包括 `max_rewrite_attempts`）返回 422
+
 完整运行：
 
 ```powershell
@@ -920,8 +1082,9 @@ docker compose down
 PDF、元数据、chunk 和 FAISS 索引在容器重建后仍可保留；同时以只读方式
 挂载 `./models:/app/models`，容器不会下载模型。服务不依赖外部数据库或在线 API。
 
-第四阶段通过环境变量覆盖 `QA_TOP_K`、`MIN_RETRIEVAL_SCORE`、`LLM_BASE_URL`、
-`LLM_MODEL` 等配置。Compose 默认把 `LLM_BASE_URL` 设为
+第四、五阶段通过环境变量覆盖 `QA_TOP_K`、`MIN_RETRIEVAL_SCORE`、`LLM_BASE_URL`、
+`LLM_MODEL`、`ENABLE_QUERY_REWRITE`、`MAX_QUERY_REWRITE_ATTEMPTS`、
+`AGENT_TOP_K` 等配置。Compose 默认把 `LLM_BASE_URL` 设为
 `http://host.docker.internal:11434/v1`，便于容器访问宿主机 Ollama；
 如使用 Docker 内部服务名，可自行覆盖。`LLM_API_KEY` 默认为空。
 
@@ -949,7 +1112,10 @@ docker compose config
 - 问答只允许使用经过分数过滤且实际送入 LLM 的证据，不允许绕过向量检索读全文。
 - 引用由 `CitationService` 从 evidence 生成，不解析模型输出中的引用。
 - LLM 调用只在证据足够时发生；启动时不探测 LLM 服务。
-- INFO 日志只记录 request id、检索/证据数量、状态和耗时，不记录问题或证据正文。
+- Agent 每次请求使用独立 state，不在请求之间复用图状态。
+- 图最多一次改写和一次二次检索，并设置递归上限。
+- `workflow` 只返回安全节点名和计数，不返回 Prompt、模型原始输出或思维链。
+- INFO 日志只记录 request id、检索/证据数量、改写/拒答状态和耗时。
 - 单机 JSON + FAISS 仅面向课程项目的小规模知识库，不适合多实例并发写入。
 
 ## 已知限制
@@ -960,7 +1126,8 @@ docker compose config
 - 无 Embedding 模型时索引/检索/问答返回 503；上传和文档管理仍可用。
 - LLM 不可用时，有证据问答返回 503；无证据问题仍返回 200 refused，不调用 LLM。
 - 本地 JSON + FAISS 是单机小规模方案，不适合多进程并发写入或大规模语料。
-- 没有问题改写、二次检索、流式输出、多轮记忆、LangGraph 或 Agent 工作流。
+- 问题改写和二次检索最多各一次，不进行自主循环或第三次检索。
+- 不支持多轮对话/记忆、流式输出、多 Agent 或工具调用。
 - Docker 镜像未在本环境实际构建，因 Docker Desktop 引擎未启动；仅验证了 Compose 语法。
 
 ## 第二阶段验收标准
@@ -1002,21 +1169,35 @@ docker compose config
 - [x] 空问题、超长问题、非法 top_k/document_ids 返回 422
 - [x] document_ids 过滤和未索引文档隔离生效
 - [x] Prompt 只包含筛选后的 evidence，上下文和引用文本有长度上限
-- [x] 不自动下载模型，不调用在线 API，未引入 LangGraph
+- [x] 不自动下载模型，不调用在线 API；LangGraph 在第五阶段才引入
 
-## 第五阶段计划
+## 第五阶段验收标准
 
-1. 检索与问答质量
-   - chunk 参数、相似度阈值和 top_k 的评测
-   - 检索召回率、引用准确率和拒答准确率测试集
-   - 真实本地 Embedding 与 LLM 的端到端验证
-2. 问答能力增强
-   - 在明确需求后再考虑多轮对话、问题改写或二次检索
+- [x] 前四阶段 60 个测试仍然全部通过
+- [x] 第五阶段新增 26 个测试全部通过，总计 86 passed
+- [x] 使用真实 LangGraph StateGraph 和条件边
+- [x] 初次证据充分时不改写、不二次检索
+- [x] 初次不足时最多改写一次、最多二次检索一次
+- [x] 二次不足时明确拒答，citations 为空
+- [x] 引用来自最终送入回答 LLM 的证据
+- [x] 改写失败/非法输出正常拒答，HTTP 200
+- [x] 回答 LLM 不可用返回 503，Embedding 不可用返回 503
+- [x] 不暴露 Prompt、模型原始输出或思维链
+- [x] 不调用在线 API、不自动下载模型
+- [x] 旧 qa、retrieval、documents、health API 回归通过
+
+## 第六阶段计划
+
+1. 真实模型与效果评估
+   - 真实 Embedding + 真实本地 LLM 的完整 Agent 验证
+   - 问题改写质量、二次检索召回率和拒答准确率评测
+   - 真实论文与实验记录测试集
+2. 能力增强
+   - 在明确需求后再考虑多轮对话、流式输出或工具调用
    - 更严格的证据冲突处理和回答格式约束
 3. 工程化
    - 增加 Ruff、mypy、覆盖率和 CI
    - Docker 镜像构建、模型挂载和容器接口回归验证
-   - 本地 LLM 健康状态的安全摘要接口（可选）
 
-当前仍未实现 OCR、LangGraph、问题改写、二次检索、多 Agent、流式输出、
-Chat 历史/多轮记忆或 Web 前端。
+当前仍未实现 OCR、LangChain 业务抽象、多轮对话、流式输出、多 Agent、
+工具调用或 Web 前端。

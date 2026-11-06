@@ -147,6 +147,36 @@ class Settings(BaseSettings):
         ge=1,
         description="LLM 最大输出 token 数。",
     )
+    enable_query_rewrite: bool = Field(
+        default=True,
+        description="是否允许初次检索失败后改写问题。",
+    )
+    max_query_rewrite_attempts: int = Field(
+        default=1,
+        ge=0,
+        le=1,
+        description="最大问题改写次数，只允许 0 或 1。",
+    )
+    rewrite_max_chars: int = Field(
+        default=500,
+        ge=1,
+        description="改写查询的最大字符数。",
+    )
+    agent_top_k: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Agent 默认检索数量。",
+    )
+    agent_max_context_chars: int = Field(
+        default=6000,
+        ge=1,
+        description="Agent 送入回答模型的证据文本总上限。",
+    )
+    agent_trace_enabled: bool = Field(
+        default=True,
+        description="是否返回安全的工作流摘要。",
+    )
 
     @model_validator(mode="after")
     def validate_chunking(self) -> "Settings":

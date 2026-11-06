@@ -11,3 +11,7 @@ class EmbeddingModelUnavailableError(ProjectError):
 
 class LLMUnavailableError(ProjectError):
     """本地 OpenAI-compatible LLM 服务不可用或响应无效。"""
+
+
+class QueryRewriteError(ProjectError):
+    """问题改写服务不可用，或模型输出未通过安全校验。"""

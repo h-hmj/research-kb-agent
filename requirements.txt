@@ -8,6 +8,7 @@ python-multipart>=0.0.9,<0.1.0
 numpy>=1.26.0,<3.0.0
 faiss-cpu>=1.9.0,<2.0.0
 sentence-transformers>=3.0.0,<6.0.0
+langgraph==1.2.20
 
 # 测试依赖
 pytest>=8.3.0,<9.0.0

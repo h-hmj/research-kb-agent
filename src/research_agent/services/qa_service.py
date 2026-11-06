@@ -58,7 +58,7 @@ class QAService:
                 document_ids=document_ids,
             )
             retrieved_count = len(retrieved.results)
-            evidence = self._select_evidence(retrieved.results)
+            evidence = self.select_evidence(retrieved.results)
             evidence_count = len(evidence)
 
             if evidence_count < self._settings.min_evidence_count:
@@ -69,54 +69,18 @@ class QAService:
                     top_k=effective_top_k,
                     reason=NO_EVIDENCE_REASON,
                 )
-                self._log_result(
-                    request_id,
-                    retrieved_count,
-                    evidence_count,
-                    "refused",
-                    started,
-                )
-                return response
-
-            answer = (await self._llm.answer(query, evidence)).strip()
-            if not answer:
-                raise LLMUnavailableError("LLM 返回空回答")
-
-            if answer == QA_REFUSAL_ANSWER:
-                response = self._refused(
-                    query,
+            else:
+                response = await self.answer_from_evidence(
+                    question=query,
+                    evidence=evidence,
                     retrieved_count=retrieved_count,
-                    evidence_count=evidence_count,
                     top_k=effective_top_k,
-                    reason=LLM_REFUSAL_REASON,
                 )
-                self._log_result(
-                    request_id,
-                    retrieved_count,
-                    evidence_count,
-                    "refused",
-                    started,
-                )
-                return response
-
-            citations = self._citations.build(evidence)
-            response = QAResponse(
-                status="answered",
-                answer=answer,
-                citations=citations,
-                retrieval=QARetrievalInfo(
-                    query=query,
-                    retrieved_count=retrieved_count,
-                    evidence_count=evidence_count,
-                    top_k=effective_top_k,
-                ),
-                refusal_reason=None,
-            )
             self._log_result(
                 request_id,
                 retrieved_count,
                 evidence_count,
-                "answered",
+                response.status,
                 started,
             )
             return response
@@ -128,12 +92,53 @@ class QAService:
             )
             raise
 
-    def _select_evidence(
+    async def answer_from_evidence(
+        self,
+        question: str,
+        evidence: list[EvidenceChunk],
+        retrieved_count: int,
+        top_k: int,
+    ) -> QAResponse:
+        """复用第四阶段的“证据 -> LLM -> 服务端引用”逻辑，不再检索。"""
+        answer = (await self._llm.answer(question, evidence)).strip()
+        if not answer:
+            raise LLMUnavailableError("LLM 返回空回答")
+
+        evidence_count = len(evidence)
+        if answer == QA_REFUSAL_ANSWER:
+            return self._refused(
+                question,
+                retrieved_count=retrieved_count,
+                evidence_count=evidence_count,
+                top_k=top_k,
+                reason=LLM_REFUSAL_REASON,
+            )
+
+        return QAResponse(
+            status="answered",
+            answer=answer,
+            citations=self._citations.build(evidence),
+            retrieval=QARetrievalInfo(
+                query=question,
+                retrieved_count=retrieved_count,
+                evidence_count=evidence_count,
+                top_k=top_k,
+            ),
+            refusal_reason=None,
+        )
+
+    def select_evidence(
         self,
         results: list[RetrievalResult],
+        max_context_chars: int | None = None,
     ) -> list[EvidenceChunk]:
+        """按第四阶段阈值筛选证据，可覆盖上下文长度上限。"""
         evidence: list[EvidenceChunk] = []
-        remaining_chars = self._settings.max_context_chars
+        remaining_chars = (
+            self._settings.max_context_chars
+            if max_context_chars is None
+            else max_context_chars
+        )
 
         for result in results:
             if result.score < self._settings.min_retrieval_score:

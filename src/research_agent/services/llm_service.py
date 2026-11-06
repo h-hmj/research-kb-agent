@@ -15,6 +15,27 @@ LLM_UNAVAILABLE_DETAIL = (
 
 QA_REFUSAL_ANSWER = "无法根据已检索到的资料回答该问题。"
 
+REWRITE_SYSTEM_PROMPT = """你是科研知识库检索问题改写器。
+你的任务仅是把用户问题改写为更适合在论文、实验记录和组会材料中检索的简短查询。
+不得回答问题，不得补充外部知识，不得编造术语或事实。
+保留用户原意、关键实体、实验条件和限制。
+只输出一条改写后的查询文本，不要解释，不要添加引号、编号或 Markdown。"""
+
+
+def build_rewrite_messages(original_question: str) -> list[dict[str, str]]:
+    """构造问题改写消息；不携带证据，也不暴露给客户端。"""
+    return [
+        {"role": "system", "content": REWRITE_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": (
+                f"原始问题：\n{original_question}\n\n"
+                "只输出用于检索的改写问题。"
+            ),
+        },
+    ]
+
+
 QA_SYSTEM_PROMPT = """你是科研知识库助手。
 只能依据用户消息中提供的“证据片段”回答，不得使用外部知识、常识补全或猜测。
 不得虚构论文、实验数据、页码、结论或引用。
@@ -62,6 +83,9 @@ class LLMService(Protocol):
     ) -> str:
         """仅基于 evidence 生成单轮回答。"""
 
+    async def rewrite(self, question: str) -> str:
+        """改写检索问题，不回答问题。"""
+
 
 class OpenAICompatibleLLMService:
     """调用本地 OpenAI-compatible Chat Completions 接口。"""
@@ -87,6 +111,14 @@ class OpenAICompatibleLLMService:
         question: str,
         evidence: list[EvidenceChunk],
     ) -> str:
+        """仅基于 evidence 生成回答。"""
+        return await self._complete(build_qa_messages(question, evidence))
+
+    async def rewrite(self, question: str) -> str:
+        """改写检索问题，不生成回答。"""
+        return await self._complete(build_rewrite_messages(question))
+
+    async def _complete(self, messages: list[dict[str, str]]) -> str:
         """调用本地 LLM；任何网络或响应异常统一转为 LLMUnavailableError。"""
         headers = {"Content-Type": "application/json"}
         if self._api_key:
@@ -94,7 +126,7 @@ class OpenAICompatibleLLMService:
 
         payload = {
             "model": self._model,
-            "messages": build_qa_messages(question, evidence),
+            "messages": messages,
             "temperature": self._temperature,
             "max_tokens": self._max_tokens,
         }

@@ -1,5 +1,6 @@
 """Pydantic 请求与响应模型。"""
 
+from .agent import AgentAskRequest, AgentAskResponse, AgentStatus, AgentWorkflow
 from .common import HealthResponse, RootResponse
 from .documents import (
     DocumentDetail,
@@ -26,6 +27,10 @@ from .retrieval import (
 )
 
 __all__ = [
+    "AgentAskRequest",
+    "AgentAskResponse",
+    "AgentStatus",
+    "AgentWorkflow",
     "DocumentChunk",
     "DocumentDetail",
     "DocumentListResponse",
