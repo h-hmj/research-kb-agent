@@ -86,6 +86,9 @@ class LLMService(Protocol):
     async def rewrite(self, question: str) -> str:
         """改写检索问题，不回答问题。"""
 
+    async def complete(self, messages: list[dict[str, str]]) -> str:
+        """执行一次受控 Chat Completions，供结构化工具复用。"""
+
 
 class OpenAICompatibleLLMService:
     """调用本地 OpenAI-compatible Chat Completions 接口。"""
@@ -117,6 +120,10 @@ class OpenAICompatibleLLMService:
     async def rewrite(self, question: str) -> str:
         """改写检索问题，不生成回答。"""
         return await self._complete(build_rewrite_messages(question))
+
+    async def complete(self, messages: list[dict[str, str]]) -> str:
+        """执行一次受控 Chat Completions，供结构化工具复用。"""
+        return await self._complete(messages)
 
     async def _complete(self, messages: list[dict[str, str]]) -> str:
         """调用本地 LLM；任何网络或响应异常统一转为 LLMUnavailableError。"""

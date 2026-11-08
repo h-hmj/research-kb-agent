@@ -12,10 +12,12 @@ from .api.routes.documents import router as documents_router
 from .api.routes.health import router as health_router
 from .api.routes.qa import router as qa_router
 from .api.routes.retrieval import router as retrieval_router
+from .api.routes.tools import router as tools_router
 from .core.config import Settings, get_settings
 from .core.logging import configure_logging
 from .schemas.common import RootResponse
 from .services.agent_service import AgentService
+from .services.checklist_service import ChecklistService
 from .services.citation_service import CitationService
 from .services.document_service import DocumentService
 from .services.embedding_service import (
@@ -24,17 +26,23 @@ from .services.embedding_service import (
 )
 from .services.indexing_service import IndexingService
 from .services.llm_service import LLMService, OpenAICompatibleLLMService
+from .services.meeting_summary_service import MeetingSummaryService
 from .services.qa_service import QAService
 from .services.query_rewrite_service import QueryRewriteService
 from .services.retrieval_service import RetrievalService
+from .services.tool_service import ToolService
 from .storage.chunk_store import ChunkStore
 from .storage.vector_store import VectorStore
+from .tools.checklist_tool import ChecklistTool
+from .tools.knowledge_base_tool import KnowledgeBaseTool
+from .tools.meeting_summary_tool import MeetingSummaryTool
+from .tools.registry import ToolDefinition, ToolRegistry
 
 logger = logging.getLogger(__name__)
 
 PROJECT_DESCRIPTION = (
     "面向论文与实验记录的知识库与实验助理后端"
-    "（第五阶段：LangGraph 问题改写与二次检索）。"
+    "（第六阶段：白名单科研工具调用）。"
 )
 
 
@@ -73,13 +81,14 @@ def create_app(
         temperature=settings.llm_temperature,
         max_tokens=settings.llm_max_tokens,
     )
+    citation_service = CitationService(
+        max_text_length=settings.max_citation_text_length
+    )
     qa_service = QAService(
         settings=settings,
         retrieval_service=retrieval_service,
         llm_service=llm,
-        citation_service=CitationService(
-            max_text_length=settings.max_citation_text_length
-        ),
+        citation_service=citation_service,
     )
     rewrite_service = QueryRewriteService(settings, llm)
     agent_service = AgentService(
@@ -88,6 +97,34 @@ def create_app(
         qa_service=qa_service,
         rewrite_service=rewrite_service,
     )
+    checklist_service = ChecklistService(
+        settings=settings,
+        retrieval_service=retrieval_service,
+        qa_service=qa_service,
+        citation_service=citation_service,
+        llm_service=llm,
+    )
+    meeting_service = MeetingSummaryService(settings, llm)
+    tool_registry = ToolRegistry(
+        [
+            ToolDefinition(
+                name="search_knowledge_base",
+                arguments_model=KnowledgeBaseTool.arguments_model,
+                runner=KnowledgeBaseTool(retrieval_service).run,
+            ),
+            ToolDefinition(
+                name="generate_experiment_checklist",
+                arguments_model=ChecklistTool.arguments_model,
+                runner=ChecklistTool(checklist_service).run,
+            ),
+            ToolDefinition(
+                name="summarize_meeting_notes",
+                arguments_model=MeetingSummaryTool.arguments_model,
+                runner=MeetingSummaryTool(meeting_service).run,
+            ),
+        ]
+    )
+    tool_service = ToolService(tool_registry)
     document_service = DocumentService(settings)
     document_service.set_index_cleaner(indexing_service.remove_document_index)
 
@@ -127,12 +164,14 @@ def create_app(
     app.state.retrieval_service = retrieval_service
     app.state.qa_service = qa_service
     app.state.agent_service = agent_service
+    app.state.tool_service = tool_service
 
     app.include_router(health_router, prefix=settings.api_prefix)
     app.include_router(documents_router, prefix=settings.api_prefix)
     app.include_router(retrieval_router, prefix=settings.api_prefix)
     app.include_router(qa_router, prefix=settings.api_prefix)
     app.include_router(agent_router, prefix=settings.api_prefix)
+    app.include_router(tools_router, prefix=settings.api_prefix)
 
     @app.get(
         "/",

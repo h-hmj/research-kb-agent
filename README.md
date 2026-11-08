@@ -14,6 +14,8 @@
   服务端页码级引用、无证据拒答和模型不可用 503。
 - **第五阶段**：LangGraph StateGraph、初次检索、证据判断、
   最多一次问题改写和二次检索、最终回答或明确拒答。
+- **第六阶段**：白名单科研工具调用、真实 ToolGraph、基于证据的实验
+  checklist、组会总结与安全引用。
 
 当前不调用任何在线 API，不使用数据库或云端向量库。向量化和 LLM 均只使用
 本机服务或本地模型目录；代码不会自动下载模型，LLM 也不会在启动时被探测。
@@ -87,11 +89,28 @@
 - [x] 返回安全 `workflow` 摘要，不暴露 Prompt、思维链或模型原始响应
 - [x] 使用 FakeEmbedding/FakeLLM + 真实 FAISS + 真实 LangGraph 编排测试
 
-**尚未实现**：OCR、LangChain 业务抽象、多轮对话、流式输出、多 Agent、
-工具调用、Web 前端或在线模型 API。扫描型 PDF 可以上传，但没有文字层时
-提取结果为空，当前不会自动 OCR。
+### 第六阶段（科研工具调用）
 
-## 第三、四、五阶段数据流
+- [x] 白名单只允许三个工具，工具名由 API 显式指定
+- [x] 每次请求最多执行一个工具，禁止工具调用自身或其他工具
+- [x] 真实 `ToolGraph`：validate → execute once → format → END
+- [x] `search_knowledge_base` 复用 FAISS 检索，不调用 LLM
+- [x] `generate_experiment_checklist` 只基于检索证据生成结构化 checklist
+- [x] checklist 无足够证据时拒答，不调用 LLM
+- [x] checklist 服务端校验 JSON、分类、优先级、ID 和 evidence_ids
+- [x] checklist 引用来自实际检索证据，不信任模型生成的引用
+- [x] `summarize_meeting_notes` 只使用用户输入文本，不检索知识库
+- [x] 组会文本按自然段生成稳定 segment ID 和字符范围
+- [x] 组会总结校验 owner/deadline 为 null 或字符串，不伪造来源
+- [x] 组会超长返回 422，不静默截断
+- [x] 统一安全响应和 workflow 摘要，不暴露 Prompt/CoT/原始响应
+- [x] 使用 FakeEmbedding/FakeLLM + 真实 FAISS + 真实 ToolGraph 测试
+
+**尚未实现**：OCR、LangChain 业务抽象、多轮对话、流式输出、多 Agent、
+外部网络工具、自动执行实验或外部写入操作、Web 前端或在线模型 API。
+扫描型 PDF 可以上传，但没有文字层时提取结果为空，当前不会自动 OCR。
+
+## 第三、四、五、六阶段数据流
 
 ```text
 上传 PDF
@@ -119,6 +138,20 @@ Agent 工作流（POST /agent/ask）：
 Agent 最多进行一次问题改写和一次二次检索，图不会回到改写节点，也不允许
 第三次检索。设置递归上限是为了防止编排错误导致无限循环。
 
+ToolGraph（POST /tools/run）：
+
+```text
+API 请求
+  → validate_tool_request（白名单 + 参数 Schema）
+  → execute_selected_tool（只执行一个工具）
+  → format_tool_response（统一安全响应）
+  → END
+```
+
+工具名必须由 API 显式传入，LLM 不参与选择工具。工具不会自动调用自身、
+其他工具、shell、URL 或外部写入操作。checklist 必须基于知识库证据；
+组会总结只基于用户提交的组会文本。
+
 ## 项目目录结构
 
 ```text
@@ -130,13 +163,22 @@ research-agent/
 │       ├── core/
 │       │   ├── __init__.py
 │       │   ├── config.py                 # Settings 与配置校验
-│       │   ├── exceptions.py             # Embedding / LLM / 改写异常
+│       │   ├── exceptions.py             # 模型/工具/改写内部异常
 │       │   └── logging.py                # 标准日志初始化
 │       ├── agents/
 │       │   ├── __init__.py
-│       │   ├── state.py                  # 显式 Graph State
+│       │   ├── state.py                  # 显式 Agent Graph State
 │       │   ├── nodes.py                  # 检索/判断/改写/回答/拒答节点
-│       │   └── research_graph.py         # StateGraph 构建与条件边
+│       │   ├── research_graph.py         # Agent StateGraph
+│       │   ├── tool_state.py             # 工具图 State
+│       │   └── tool_graph.py             # 受控 ToolGraph
+│       ├── tools/
+│       │   ├── __init__.py
+│       │   ├── base.py                   # ToolOutcome
+│       │   ├── registry.py               # 白名单和参数 Schema
+│       │   ├── knowledge_base_tool.py    # 检索工具
+│       │   ├── checklist_tool.py         # checklist 工具
+│       │   └── meeting_summary_tool.py   # 组会总结工具
 │       ├── api/
 │       │   ├── __init__.py
 │       │   └── routes/
@@ -145,14 +187,16 @@ research-agent/
 │       │       ├── documents.py          # 上传/列表/详情/删除/索引
 │       │       ├── retrieval.py          # 自然语言检索
 │       │       ├── qa.py                 # 单轮问答
-│       │       └── agent.py              # LangGraph Agent 接口
+│       │       ├── agent.py              # LangGraph Agent 接口
+│       │       └── tools.py              # 统一工具接口
 │       ├── schemas/
 │       │   ├── __init__.py
 │       │   ├── common.py                 # 通用响应
 │       │   ├── documents.py              # 文档与 index_status
 │       │   ├── retrieval.py              # chunk、索引和检索模型
 │       │   ├── qa.py                     # 问答、证据和引用模型
-│       │   └── agent.py                  # Agent 请求、流程摘要和响应
+│       │   ├── agent.py                  # Agent 请求、流程摘要和响应
+│       │   └── tools.py                  # 工具输入、输出和统一响应
 │       ├── services/
 │       │   ├── __init__.py
 │       │   ├── README.md
@@ -167,7 +211,10 @@ research-agent/
 │       │   ├── citation_service.py       # 服务端引用生成
 │       │   ├── qa_service.py             # 证据判断、拒答与问答编排
 │       │   ├── query_rewrite_service.py  # LLM 问题改写与输出校验
-│       │   └── agent_service.py          # LangGraph 入口和安全摘要
+│       │   ├── agent_service.py          # LangGraph 入口和安全摘要
+│       │   ├── checklist_service.py      # 证据驱动 checklist 与引用
+│       │   ├── meeting_summary_service.py# 组会分段、JSON 校验和引用
+│       │   └── tool_service.py           # ToolGraph 入口和安全摘要
 │       └── storage/
 │           ├── __init__.py
 │           ├── README.md
@@ -182,7 +229,8 @@ research-agent/
 │   ├── test_documents.py                 # 第二阶段测试
 │   ├── test_retrieval.py                 # 第三阶段分块/索引/检索测试
 │   ├── test_qa.py                        # 第四阶段问答/引用/拒答测试
-│   └── test_agent.py                     # 第五阶段 LangGraph 工作流测试
+│   ├── test_agent.py                     # 第五阶段 LangGraph 工作流测试
+│   └── test_tools.py                     # 第六阶段工具与 ToolGraph 测试
 ├── scripts/
 │   └── download_embedding_model.py       # 有网环境模型下载（规避 hf_xet 坑）
 ├── data/                                 # 启动时自动创建，已被 .gitignore 忽略
@@ -392,7 +440,7 @@ StateGraph，仅推理模型用 Fake 替代。
 预期结果（具体以实际执行为准）：
 
 ```text
-86 passed
+107 passed
 ```
 
 ## 数据目录说明
@@ -494,6 +542,7 @@ data/
 | `AGENT_TOP_K` | `5` | Agent 默认检索数量，最大 20 |
 | `AGENT_MAX_CONTEXT_CHARS` | `6000` | Agent 证据文本总上限 |
 | `AGENT_TRACE_ENABLED` | `true` | 是否返回安全工作流摘要 |
+| `MAX_MEETING_CONTEXT_CHARS` | `16000` | 组会有效段落总字符上限 |
 
 示例：
 
@@ -514,6 +563,7 @@ $env:LLM_MODEL = "qwen2.5:3b-instruct"
 $env:ENABLE_QUERY_REWRITE = "true"
 $env:MAX_QUERY_REWRITE_ATTEMPTS = "1"
 $env:AGENT_TOP_K = "5"
+$env:MAX_MEETING_CONTEXT_CHARS = "16000"
 uvicorn src.research_agent.main:app --reload --port 8000
 ```
 
@@ -535,7 +585,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/ | ConvertTo-Json
 {
   "name": "科研知识库与实验助理 Agent",
   "version": "0.1.0",
-  "description": "面向论文与实验记录的知识库与实验助理后端（第五阶段：LangGraph 问题改写与二次检索）。"
+  "description": "面向论文与实验记录的知识库与实验助理后端（第六阶段：白名单科研工具调用）。"
 }
 ```
 
@@ -866,6 +916,116 @@ Invoke-RestMethod `
 | `/api/v1/qa/ask` | 1 | 否 | 第四阶段单轮问答 |
 | `/api/v1/agent/ask` | 1 或 2 | 最多 1 次 | LangGraph 检索增强工作流 |
 
+### 科研工具
+
+统一接口：
+
+```text
+POST /api/v1/tools/run
+```
+
+工具名只能是：
+
+```text
+search_knowledge_base
+generate_experiment_checklist
+summarize_meeting_notes
+```
+
+每次请求只执行一个工具，不接受任意函数名、shell、URL 或模块名。
+
+检索工具：
+
+```powershell
+$body = @{
+    tool_name = "search_knowledge_base"
+    arguments = @{
+        query = "实验中空白对照的作用"
+        top_k = 5
+    }
+} | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod `
+    -Uri "http://127.0.0.1:8000/api/v1/tools/run" `
+    -Method Post `
+    -ContentType "application/json" `
+    -Body $body
+```
+
+实验 checklist：
+
+```powershell
+$body = @{
+    tool_name = "generate_experiment_checklist"
+    arguments = @{
+        experiment_goal = "比较不同温度对酶活性的影响"
+        constraints = @("样品数量有限", "需要设置空白对照")
+        top_k = 5
+    }
+} | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod `
+    -Uri "http://127.0.0.1:8000/api/v1/tools/run" `
+    -Method Post `
+    -ContentType "application/json" `
+    -Body $body
+```
+
+组会总结：
+
+```powershell
+$body = @{
+    tool_name = "summarize_meeting_notes"
+    arguments = @{
+        meeting_title = "2026-11-07 组会"
+        meeting_text = "实验进度：完成 A 组。`n`n下周计划：补做 B 组。"
+        focus = "实验进度与下周安排"
+    }
+} | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod `
+    -Uri "http://127.0.0.1:8000/api/v1/tools/run" `
+    -Method Post `
+    -ContentType "application/json" `
+    -Body $body
+```
+
+统一响应：
+
+```json
+{
+  "status": "success",
+  "tool_name": "search_knowledge_base",
+  "result": {
+    "query": "实验中空白对照的作用",
+    "results": []
+  },
+  "workflow": {
+    "steps": [
+      "validate_tool_request",
+      "execute_selected_tool",
+      "format_tool_response"
+    ],
+    "llm_called": false,
+    "retrieval_count": 0,
+    "evidence_count": 0
+  },
+  "refusal_reason": null
+}
+```
+
+工具边界：
+
+- 检索工具只返回已有 FAISS 检索字段，不调用 LLM。
+- checklist 必须先过 `MIN_RETRIEVAL_SCORE` 和 `MIN_EVIDENCE_COUNT`；
+  无证据时返回 200 refused，不调用 LLM。
+- checklist 的 citations 只来自实际传给模型的证据，伪造 `evidence_ids` 返回 503。
+- 组会总结不检索知识库，只使用 `meeting_text`；按自然段生成稳定 segment ID。
+- 组会文本为空、超过 `MAX_MEETING_CONTEXT_CHARS` 时返回 422，不调用 LLM。
+- 组会总结的 owner/deadline 没有原文明确信息时必须为 null；
+  `source_segment_ids` 不存在时返回 503。
+- 工具输出不包含 Prompt、模型原始响应、思维链、API Key 或绝对路径。
+
 ### 查询文档列表
 
 ```powershell
@@ -1039,6 +1199,23 @@ manifest 中该文档的全部记录
 - 连续请求 state 隔离
 - 未知字段（包括 `max_rewrite_attempts`）返回 422
 
+第六阶段新增 21 个测试，测试覆盖：
+
+- 真实 `CompiledStateGraph` ToolGraph 和三个节点
+- 非白名单工具、三个工具的非法参数返回 422
+- 检索工具返回原有引用字段、不调用 LLM、空索引返回空结果
+- 检索工具 Embedding 不可用返回 503
+- checklist 成功、服务端 citations、检索数量/证据数量
+- checklist 无证据/低分拒答且不调用 LLM
+- checklist 伪造 evidence_id、非法 JSON、非法 Schema、重复 ID 返回 503
+- meeting 自然段 segment ID、结构化字段和段落 citations
+- meeting 伪造 segment ID 返回 503
+- meeting owner/deadline 保持 null
+- meeting 空文本、超过上下文上限返回 422 且不调用 LLM
+- meeting LLM 不可用返回 503
+- workflow 摘要不含 Prompt、密钥、绝对路径或思维链
+- 连续工具请求 State 隔离
+
 完整运行：
 
 ```powershell
@@ -1082,9 +1259,10 @@ docker compose down
 PDF、元数据、chunk 和 FAISS 索引在容器重建后仍可保留；同时以只读方式
 挂载 `./models:/app/models`，容器不会下载模型。服务不依赖外部数据库或在线 API。
 
-第四、五阶段通过环境变量覆盖 `QA_TOP_K`、`MIN_RETRIEVAL_SCORE`、`LLM_BASE_URL`、
-`LLM_MODEL`、`ENABLE_QUERY_REWRITE`、`MAX_QUERY_REWRITE_ATTEMPTS`、
-`AGENT_TOP_K` 等配置。Compose 默认把 `LLM_BASE_URL` 设为
+第四、五、六阶段通过环境变量覆盖 `QA_TOP_K`、`MIN_RETRIEVAL_SCORE`、
+`LLM_BASE_URL`、`LLM_MODEL`、`ENABLE_QUERY_REWRITE`、
+`MAX_QUERY_REWRITE_ATTEMPTS`、`AGENT_TOP_K`、`MAX_MEETING_CONTEXT_CHARS`
+等配置。Compose 默认把 `LLM_BASE_URL` 设为
 `http://host.docker.internal:11434/v1`，便于容器访问宿主机 Ollama；
 如使用 Docker 内部服务名，可自行覆盖。`LLM_API_KEY` 默认为空。
 
@@ -1127,7 +1305,9 @@ docker compose config
 - LLM 不可用时，有证据问答返回 503；无证据问题仍返回 200 refused，不调用 LLM。
 - 本地 JSON + FAISS 是单机小规模方案，不适合多进程并发写入或大规模语料。
 - 问题改写和二次检索最多各一次，不进行自主循环或第三次检索。
-- 不支持多轮对话/记忆、流式输出、多 Agent 或工具调用。
+- 工具调用只支持三个白名单工具，不支持任意函数、shell、URL 或外部写入。
+- checklist 依赖知识库证据；组会总结只依赖用户提交的文本，不检索知识库。
+- 不支持多轮对话/记忆、流式输出、多 Agent 或外部工具。
 - Docker 镜像未在本环境实际构建，因 Docker Desktop 引擎未启动；仅验证了 Compose 语法。
 
 ## 第二阶段验收标准
@@ -1186,18 +1366,34 @@ docker compose config
 - [x] 不调用在线 API、不自动下载模型
 - [x] 旧 qa、retrieval、documents、health API 回归通过
 
-## 第六阶段计划
+## 第六阶段验收标准
 
-1. 真实模型与效果评估
-   - 真实 Embedding + 真实本地 LLM 的完整 Agent 验证
-   - 问题改写质量、二次检索召回率和拒答准确率评测
-   - 真实论文与实验记录测试集
+- [x] 前五阶段 86 个测试仍然全部通过
+- [x] 第六阶段新增 21 个测试全部通过，总计 107 passed
+- [x] 使用真实 LangGraph ToolGraph 和三个节点
+- [x] 工具名只能来自三个白名单，每次只执行一个工具
+- [x] 三个工具均有输入/输出 Schema 和参数校验
+- [x] 检索工具复用 FAISS，不调用 LLM
+- [x] checklist 无证据/低分时拒答，不调用 LLM
+- [x] checklist citations 来自实际检索证据
+- [x] checklist 非法 JSON/Schema/evidence_id 被拒绝
+- [x] 组会总结只使用输入段落，segment 引用来自原文
+- [x] 组会总结不虚构 owner/deadline；非法 segment ID 被拒绝
+- [x] 组会超长返回 422，不静默截断
+- [x] 工具响应不泄露 Prompt、CoT、密钥或内部路径
+- [x] 旧 Agent、QA、检索、文档和健康检查全部回归通过
+
+## 第七阶段计划
+
+1. 真实模型与工具质量评估
+   - 真实 Embedding + 真实本地 LLM 的完整 checklist/组会总结验证
+   - checklist 条目质量、引用覆盖率和组会字段准确率评测
 2. 能力增强
-   - 在明确需求后再考虑多轮对话、流式输出或工具调用
-   - 更严格的证据冲突处理和回答格式约束
+   - 在明确需求后再考虑多轮对话、流式输出或更多受控工具
+   - 更严格的证据冲突处理和结构化输出约束
 3. 工程化
    - 增加 Ruff、mypy、覆盖率和 CI
    - Docker 镜像构建、模型挂载和容器接口回归验证
 
 当前仍未实现 OCR、LangChain 业务抽象、多轮对话、流式输出、多 Agent、
-工具调用或 Web 前端。
+外部网络工具、自动实验操作或 Web 前端。

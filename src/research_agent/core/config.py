@@ -177,6 +177,11 @@ class Settings(BaseSettings):
         default=True,
         description="是否返回安全的工作流摘要。",
     )
+    max_meeting_context_chars: int = Field(
+        default=16000,
+        ge=1,
+        description="组会总结输入的有效段落总字符上限。",
+    )
 
     @model_validator(mode="after")
     def validate_chunking(self) -> "Settings":

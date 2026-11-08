@@ -15,3 +15,19 @@ class LLMUnavailableError(ProjectError):
 
 class QueryRewriteError(ProjectError):
     """问题改写服务不可用，或模型输出未通过安全校验。"""
+
+
+class ToolValidationError(ProjectError):
+    """工具名或工具参数不合法。"""
+
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        super().__init__(detail)
+
+
+class ToolOutputInvalidError(ProjectError):
+    """LLM 工具输出不是合法、符合 Schema 的 JSON。"""
+
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        super().__init__(detail)

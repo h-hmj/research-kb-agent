@@ -34,7 +34,7 @@ services:
       LLM_BASE_URL: "${LLM_BASE_URL:-http://host.docker.internal:11434/v1}"
       LLM_MODEL: "${LLM_MODEL:-qwen2.5:3b-instruct}"
       LLM_API_KEY: "${LLM_API_KEY:-}"
-      LLM_TIMEOUT_SECONDS: "${LLM_TIMEOUT_SECONDS:-60}"
+      LLM_TIMEOUT_SECONDS: "${LLM_TIMEOUT_SECONDS:-180}"
       LLM_TEMPERATURE: "${LLM_TEMPERATURE:-0.0}"
       LLM_MAX_TOKENS: "${LLM_MAX_TOKENS:-512}"
       ENABLE_QUERY_REWRITE: "${ENABLE_QUERY_REWRITE:-true}"
@@ -43,6 +43,7 @@ services:
       AGENT_TOP_K: "${AGENT_TOP_K:-5}"
       AGENT_MAX_CONTEXT_CHARS: "${AGENT_MAX_CONTEXT_CHARS:-6000}"
       AGENT_TRACE_ENABLED: "${AGENT_TRACE_ENABLED:-true}"
+      MAX_MEETING_CONTEXT_CHARS: "${MAX_MEETING_CONTEXT_CHARS:-16000}"
     volumes:
       - research_data:/app/data
       - ./models:/app/models:ro
