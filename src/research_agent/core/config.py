@@ -214,6 +214,30 @@ class Settings(BaseSettings):
         default=True,
         description="是否启用本地 metrics 读取接口。",
     )
+    eval_dataset_dir: Path = Field(
+        default=Path("./eval/datasets"),
+        description="评测 JSONL 数据集目录。",
+    )
+    evaluation_dir: Path = Field(
+        default=Path("./data/evaluations"),
+        description="评测报告输出目录。",
+    )
+    evaluation_max_cases: int = Field(
+        default=100,
+        ge=1,
+        le=1000,
+        description="单次评测最大样例数。",
+    )
+    evaluation_max_error_rate: float = Field(
+        default=0.2,
+        ge=0.0,
+        le=1.0,
+        description="单次评测可接受的内部错误比例。",
+    )
+    evaluation_save_details: bool = Field(
+        default=False,
+        description="是否在报告中保存截断的问题和回答前缀。",
+    )
 
     @model_validator(mode="after")
     def validate_chunking(self) -> "Settings":

@@ -18,6 +18,8 @@
   checklist、组会总结与安全引用。
 - **第七阶段**：FastAPI SSE 流式 Agent、请求 ID、安全日志、
   进程内指标和本地 metrics 接口。
+- **第八阶段**：人工标注 JSONL 评测集、检索/引用/拒答/Agent 指标、
+  QA 与 Agent 对比和可复现 JSON/Markdown 报告。
 
 当前不调用任何在线 API，不使用数据库或云端向量库。向量化和 LLM 均只使用
 本机服务或本地模型目录；代码不会自动下载模型，LLM 也不会在启动时被探测。
@@ -123,11 +125,27 @@
 - [x] 不记录问题正文、证据正文、Prompt、token、密钥或绝对路径
 - [x] 使用 FakeStreamingLLM + 真实 LangGraph/SSE/Metrics 测试
 
+### 第八阶段（可复现评测）
+
+- [x] 人工标注 UTF-8 JSONL 数据集，严格 Schema 和唯一 id
+- [x] 数据集 SHA-256、配置快照、run_id 和 UTC 时间
+- [x] 安全数据集文件名校验，禁止路径穿越
+- [x] `retrieval` / `qa` / `agent` / `compare` 四种模式
+- [x] Recall@K、MRR@K、Citation Precision/Recall
+- [x] Refusal Accuracy、Hallucinated Answer Rate、False Refusal Rate
+- [x] Keyword Hit Rate 明确定义为弱代理指标
+- [x] Agent Rewrite Rate、Retry Success Rate
+- [x] QA 与 Agent 使用相同 top_k、document_ids 和阈值
+- [x] JSON 与 Markdown 报告原子写入，失败案例可定位
+- [x] 单 case 内部错误继续运行；错误率超阈值整体失败
+- [x] `/evaluations/run`、列表、单报告 API 和 CLI
+- [x] 不使用 LLM-as-a-Judge，不自动生成标签
+
 **尚未实现**：OCR、LangChain 业务抽象、多轮对话、WebSocket、多 Agent、
 外部网络工具、生产级监控和鉴权、自动执行实验或外部写入操作、Web 前端。
 扫描型 PDF 可以上传，但没有文字层时提取结果为空，当前不会自动 OCR。
 
-## 第三至第七阶段数据流
+## 第三至第八阶段数据流
 
 ```text
 上传 PDF
@@ -185,6 +203,20 @@ SSE 流式 Agent（POST /agent/ask/stream）：
 流式回答只发送模型增量文本；最终引用由服务端根据实际证据生成。
 错误只发送安全 error 事件，不返回 Traceback、Prompt、完整 token 或本地路径。
 
+评测流程（POST /evaluations/run）：
+
+```text
+人工标注 JSONL
+  → Schema/唯一 id/路径安全校验
+  → 数据集 SHA-256
+  → retrieval / qa / agent / compare
+  → Recall、MRR、Citation、Refusal、Keyword、Rewrite 指标
+  → JSON + Markdown 安全报告
+```
+
+`sample_eval.jsonl` 只是合成示例；没有上传/索引 `sample_experiment.pdf` 时，
+answerable 指标会偏低，这是正常结果，不代表真实模型性能。
+
 ## 项目目录结构
 
 ```text
@@ -224,7 +256,8 @@ research-agent/
 │       │       ├── agent.py              # LangGraph Agent 接口
 │       │       ├── agent_stream.py       # SSE 流式 Agent
 │       │       ├── observability.py      # 本地 metrics 接口
-│       │       └── tools.py              # 统一工具接口
+│       │       ├── tools.py              # 统一工具接口
+│       │       └── evaluation.py         # 评测运行/列表/报告接口
 │       ├── schemas/
 │       │   ├── __init__.py
 │       │   ├── common.py                 # 通用响应
@@ -253,6 +286,13 @@ research-agent/
 │       │   ├── tool_service.py           # ToolGraph 入口和安全摘要
 │       │   ├── agent_stream_service.py   # SSE 事件和客户端断开处理
 │       │   └── metrics_service.py        # 进程内指标与计量包装器
+│       ├── evaluation/
+│       │   ├── __init__.py
+│       │   ├── schemas.py                # 数据集/样例/报告模型
+│       │   ├── dataset_loader.py         # JSONL 校验、哈希、安全路径
+│       │   ├── metrics.py                # 纯指标计算
+│       │   ├── evaluator.py              # 四模式评测编排
+│       │   └── report_service.py         # JSON/Markdown 原子报告
 │       └── storage/
 │           ├── __init__.py
 │           ├── README.md
@@ -270,7 +310,16 @@ research-agent/
 │   ├── test_agent.py                     # 第五阶段 LangGraph 工作流测试
 │   ├── test_tools.py                     # 第六阶段工具与 ToolGraph 测试
 │   ├── test_streaming.py                 # 第七阶段 SSE 测试
-│   └── test_observability.py             # 第七阶段 Request ID/日志/metrics
+│   ├── test_observability.py             # 第七阶段 Request ID/日志/metrics
+│   └── test_evaluation.py                # 第八阶段评测/指标/报告
+├── eval/
+│   ├── __init__.py
+│   ├── datasets/
+│   │   ├── sample_eval.jsonl             # 合成示例，不是科研基准
+│   │   ├── sample_experiment.pdf         # 合成示例 PDF
+│   │   └── README.md
+│   ├── reports/README.md
+│   └── run_evaluation.py                 # 与 API 共用 EvaluationService
 ├── scripts/
 │   └── download_embedding_model.py       # 有网环境模型下载（规避 hf_xet 坑）
 ├── data/                                 # 启动时自动创建，已被 .gitignore 忽略
@@ -278,7 +327,8 @@ research-agent/
 │   ├── metadata/                         # UUID.json
 │   ├── chunks/                           # UUID.json（页码级 chunk）
 │   ├── vector_store/                     # index.faiss + manifest.json
-│   └── logs/                             # 可选轮转日志，默认关闭
+│   ├── logs/                             # 可选轮转日志，默认关闭
+│   └── evaluations/                      # eval-*.json / eval-*.md
 ├── models/                               # 本地 Embedding 模型，不提交
 │   └── bge-small-zh-v1.5/
 ├── .dockerignore
@@ -481,7 +531,7 @@ StateGraph，仅推理模型用 Fake 替代。
 预期结果（具体以实际执行为准）：
 
 ```text
-128 passed
+145 passed
 ```
 
 ## 数据目录说明
@@ -591,6 +641,11 @@ data/
 | `LOG_MAX_BYTES` | `5242880` | 单文件最大字节数 |
 | `LOG_BACKUP_COUNT` | `3` | 日志备份数量 |
 | `ENABLE_METRICS_ENDPOINT` | `true` | 是否启用本地 metrics 接口 |
+| `EVAL_DATASET_DIR` | `./eval/datasets` | JSONL 数据集目录 |
+| `EVALUATION_DIR` | `./data/evaluations` | 评测报告目录 |
+| `EVALUATION_MAX_CASES` | `100` | 单次最大样例数 |
+| `EVALUATION_MAX_ERROR_RATE` | `0.2` | 内部错误比例上限 |
+| `EVALUATION_SAVE_DETAILS` | `false` | 是否保存截断问题/回答 |
 
 示例：
 
@@ -617,6 +672,10 @@ $env:STREAM_HEARTBEAT_SECONDS = "15"
 $env:ENABLE_FILE_LOGGING = "false"
 $env:LOG_DIR = "./data/logs"
 $env:ENABLE_METRICS_ENDPOINT = "true"
+$env:EVAL_DATASET_DIR = "./eval/datasets"
+$env:EVALUATION_DIR = "./data/evaluations"
+$env:EVALUATION_MAX_CASES = "100"
+$env:EVALUATION_MAX_ERROR_RATE = "0.2"
 uvicorn src.research_agent.main:app --reload --port 8000
 ```
 
@@ -638,7 +697,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/ | ConvertTo-Json
 {
   "name": "科研知识库与实验助理 Agent",
   "version": "0.1.0",
-  "description": "面向论文与实验记录的知识库与实验助理后端（第七阶段：SSE 流式问答与基础可观测性）。"
+  "description": "面向论文与实验记录的知识库与实验助理后端（第八阶段：可复现评测与可靠性指标）。"
 }
 ```
 
@@ -1197,6 +1256,106 @@ Invoke-RestMethod `
 文件日志默认关闭。启用后写入 `LOG_DIR/app.log`，使用轮转，且日志只记录请求 ID、
 路径、状态、耗时和安全事件，不记录问题、证据正文、Prompt、token、密钥或绝对路径。
 
+### 评测 API 与 CLI
+
+评测集是 UTF-8 JSONL，每行包含：
+
+```json
+{
+  "id": "answerable-001",
+  "question": "实验中为什么需要设置空白对照？",
+  "answerable": true,
+  "document_ids": [],
+  "expected_sources": [
+    {"original_filename": "experiment_notes.pdf", "page_number": 2}
+  ],
+  "expected_answer_keywords": ["空白对照", "背景", "比较"],
+  "notes": "人工标注：第 2 页明确说明空白对照作用。"
+}
+```
+
+`answerable=false` 时必须没有 `expected_sources`。标签必须由人工编写或确认，
+不能使用被评测模型生成的答案作为标签。
+
+API：
+
+```powershell
+$body = @{
+  dataset_name = "sample_eval.jsonl"
+  mode = "compare"
+  top_k = 5
+} | ConvertTo-Json
+
+Invoke-RestMethod `
+  -Uri "http://127.0.0.1:8000/api/v1/evaluations/run" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body $body | ConvertTo-Json -Depth 10
+```
+
+查看最近运行：
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8000/api/v1/evaluations" |
+  ConvertTo-Json -Depth 8
+```
+
+查看单次报告：
+
+```powershell
+Invoke-RestMethod `
+  "http://127.0.0.1:8000/api/v1/evaluations/<run_id>" |
+  ConvertTo-Json -Depth 10
+```
+
+CLI：
+
+```powershell
+python -m eval.run_evaluation `
+  --dataset eval/datasets/sample_eval.jsonl `
+  --mode compare `
+  --top-k 5
+```
+
+四种模式：
+
+- `retrieval`：只做检索和 Recall/MRR，不需要 LLM。
+- `qa`：单次检索问答，评估引用、拒答和关键词弱指标。
+- `agent`：LangGraph 改写/二次检索工作流。
+- `compare`：同一数据集上分别运行 QA 和 Agent，阈值与 top_k 相同。
+
+指标定义：
+
+```text
+Recall@K = 命中的 answerable 样例数 / answerable 样例总数
+MRR@K = answerable 样例 reciprocal_rank 的平均值
+Citation Precision = 正确 citations / 返回 citations
+Citation Recall = 命中的期望来源数 / 期望来源总数
+Refusal Accuracy = 正确 answered/refused 判断数 / 总样例数
+Hallucinated Answer Rate = unanswerable 中被回答的样例数 / unanswerable 总数
+False Refusal Rate = answerable 中被拒答的样例数 / answerable 总数
+Keyword Hit Rate = 全部关键词出现的样例数 / 有关键词且 answered 的样例数
+Agent Rewrite Rate = rewrite_attempted 样例数 / agent 总样例数
+Agent Retry Success Rate = 改写后成功 answered 的数 / 改写尝试数
+```
+
+注意：
+
+- **Keyword Hit Rate 只衡量人工定义关键词是否出现，不等同于回答准确率、事实正确性或科研结论正确性。**
+- Citation 指标只验证系统返回来源与人工标注来源的匹配，不评价回答内容的完整性。
+- 评测结果只对当前数据集、知识库、模型和配置有效。
+- `sample_eval` 是合成示例，不能用来宣称通用模型性能。
+- 未提供 citation 时 Citation Precision 为 `null`，不是 0。
+- 无改写尝试时 Agent Retry Success Rate 为 `null`，不会除以 0。
+
+报告写入 `EVALUATION_DIR`（默认 `data/evaluations/`）：
+
+- `eval-*.json`：安全机器报告
+- `eval-*.md`：人工查看报告
+
+报告不包含完整问题、完整回答、Prompt、文档全文、API Key 或绝对路径。
+默认只保存 `case_id` 和统计结果；`EVALUATION_SAVE_DETAILS=true` 时也只保存截断前缀。
+
 ### 查询文档列表
 
 ```powershell
@@ -1403,6 +1562,25 @@ manifest 中该文档的全部记录
 - metrics/streaming 开关关闭时返回 404
 - 文件日志默认不创建文件，启用时只写入临时 LOG_DIR
 
+第八阶段新增 17 个测试，测试覆盖：
+
+- JSONL 合法加载、空行、非法 JSON 行号、重复 id、标签矛盾
+- 数据集 SHA-256 和安全路径穿越拒绝
+- Recall@K、MRR@K、Citation Precision/Recall
+- 无 citation 时 precision 为 null
+- Refusal Accuracy、Hallucinated Answer Rate、False Refusal Rate
+- Keyword Hit Rate 的无标签空值
+- Agent Rewrite Rate、Retry Success Rate
+- compare 模式 QA/Agent 独立指标和相同 top_k
+- JSON/Markdown 报告、run_id、哈希、配置快照
+- 报告不含完整问题/回答、Prompt、密钥或绝对路径
+- GET 列表/报告、非法 run_id
+- 临时目录、最大样例数 422
+- LLM 不可用时 retrieval 仍可运行，qa/agent/compare 返回 503
+- Embedding 不可用返回 503
+- 单 case 错误继续执行，错误率超阈值整体失败并保留 failed 报告
+- 前七阶段 128 个测试回归通过
+
 完整运行：
 
 ```powershell
@@ -1447,16 +1625,18 @@ docker compose down
 PDF、元数据、chunk 和 FAISS 索引在容器重建后仍可保留；同时以只读方式
 挂载 `./models:/app/models`，容器不会下载模型。服务不依赖外部数据库或在线 API。
 
-第四至第七阶段通过环境变量覆盖 `QA_TOP_K`、`MIN_RETRIEVAL_SCORE`、
+第四至第八阶段通过环境变量覆盖 `QA_TOP_K`、`MIN_RETRIEVAL_SCORE`、
 `LLM_BASE_URL`、`LLM_MODEL`、`ENABLE_QUERY_REWRITE`、
 `MAX_QUERY_REWRITE_ATTEMPTS`、`AGENT_TOP_K`、`MAX_MEETING_CONTEXT_CHARS`、
 `ENABLE_STREAMING`、`STREAM_HEARTBEAT_SECONDS`、`ENABLE_FILE_LOGGING`、
-`LOG_DIR`、`ENABLE_METRICS_ENDPOINT` 等配置。Compose 默认把 `LLM_BASE_URL` 设为
-`http://host.docker.internal:11434/v1`，便于容器访问宿主机 Ollama；
+`LOG_DIR`、`ENABLE_METRICS_ENDPOINT`、`EVAL_DATASET_DIR`、
+`EVALUATION_DIR`、`EVALUATION_MAX_CASES` 等配置。Compose 默认把
+`LLM_BASE_URL` 设为 `http://host.docker.internal:11434/v1`，便于容器访问宿主机 Ollama；
 如使用 Docker 内部服务名，可自行覆盖。`LLM_API_KEY` 默认为空。
 
 文件日志启用时写入数据卷内的 `/app/data/logs`，容器重建后仍保留；
-默认关闭。metrics 仅保存在进程内，容器重启后归零。
+默认关闭。metrics 仅保存在进程内，容器重启后归零。评测报告写入
+`/app/data/evaluations`，数据集从镜像内 `/app/eval/datasets` 读取。
 
 如果当前环境无法执行 Docker，可先验证 Compose 配置语法：
 
@@ -1490,6 +1670,9 @@ docker compose config
 - SSE 只返回白名单事件，错误只返回安全 code/message，不返回异常栈。
 - 流式 token 只在回答 LLM 实际流式生成时发送，不伪造 token。
 - metrics 接口只读进程内计数，不触发模型/向量/外部服务请求。
+- 评测标签必须人工编写；不使用 LLM 自动生成标准答案或 LLM-as-a-Judge。
+- 评测只比较服务端返回 citation 与人工 expected_sources，不评价完整语义。
+- 评测报告默认不保存完整 question、answer、citation text 或 notes。
 - 单机 JSON + FAISS 仅面向课程项目的小规模知识库，不适合多实例并发写入。
 
 ## 已知限制
@@ -1506,8 +1689,12 @@ docker compose config
 - 不支持多轮对话/记忆、WebSocket、多 Agent 或外部工具。
 - 真实 Ollama SSE 流式回答尚未验证；当前流式测试使用 FakeStreamingLLM。
 - metrics 接口默认无认证，仅适合本地开发，生产必须加鉴权或移除。
+- 评测自动化测试使用 FakeEmbedding/FakeLLM 和合成数据集；
+  真实论文语料、真实 LLM 的评测指标尚未完成。
+- `sample_eval.jsonl` 只是格式示例，不是科研基准，不能据此宣称模型性能。
+- 评测是同步本地小规模执行，不适合大批量或并发评测。
 - Docker Desktop 当前可运行，但现有 `research-agent:0.1.0` 镜像是旧版本，
-  需要重新执行 `docker compose up -d --build` 才会包含第六、七阶段代码。
+  需要重新执行 `docker compose up -d --build` 才会包含第六至八阶段代码。
 - 当前尚未实现生产级监控、分布式追踪、限流或用户鉴权。
 
 ## 第二阶段验收标准
@@ -1600,17 +1787,39 @@ docker compose config
 - [x] metrics 接口不泄露问题、文档文本、密钥或日志内容
 - [x] 旧工具、Agent、QA、检索、文档和健康检查全部回归通过
 
-## 第八阶段计划
+## 第八阶段验收标准
 
-1. 真实流式模型验证
-   - 使用真实 Ollama SSE 验证 token 增量、断流和超时
-   - 评估流式回答延迟、首 token 时间和引用一致性
-2. 生产化
-   - metrics 鉴权、限流、访问控制
-   - Docker 镜像重建与容器内 SSE/metrics 回归
-3. 质量与工程化
-   - 增加 Ruff、mypy、覆盖率和 CI
-   - 观察指标、错误率和日志轮转容量
+- [x] 前七阶段 128 个测试仍然全部通过
+- [x] 第八阶段新增 17 个测试全部通过，总计 145 passed
+- [x] 合法 JSONL、空行、非法 JSON、重复 id、标签矛盾均正确处理
+- [x] 数据集 SHA-256 稳定，安全文件名拒绝路径穿越
+- [x] Recall@K、MRR@K、Citation Precision/Recall 计算正确
+- [x] 无 citation 时 precision 为 null
+- [x] Refusal 三项指标和 Keyword Hit Rate 计算正确
+- [x] Agent Rewrite/Retry 指标正确，无改写时 retry 为 null
+- [x] compare 模式 QA/Agent 使用相同 top_k 和阈值
+- [x] JSON/Markdown 报告、run_id、哈希、配置快照和失败案例
+- [x] 报告不泄露完整问题、回答、Prompt、密钥或绝对路径
+- [x] GET 列表/报告、非法 run_id、最大样例数 422
+- [x] LLM 不可用时 retrieval 可运行，qa/agent/compare 返回 503
+- [x] Embedding 不可用返回 503
+- [x] 单 case 错误继续评测；错误率超阈值整体失败且保留 failed 报告
+- [x] 未使用 LLM-as-a-Judge，未生成评测标签
+- [x] 前七阶段全部回归通过
+
+## 第九阶段计划
+
+1. 真实评测
+   - 准备人工确认的真实论文/实验记录数据集
+   - 用真实 Embedding 和本地 LLM 运行 retrieval/qa/agent/compare
+   - 只报告真实结果，不用 sample_eval 宣称模型性能
+2. 质量改进
+   - 根据失败案例调整检索、证据阈值和回答格式
+   - 建立人工复核流程，避免标签漂移
+3. 工程化
+   - Ruff、mypy、覆盖率和 CI
+   - Docker CPU 镜像重建与容器内评测回归
+   - metrics 鉴权、限流和容量观察
 
 当前仍未实现 WebSocket、多轮对话、Web 前端、多 Agent、外部网络工具、
 生产级监控/鉴权或自动实验操作。

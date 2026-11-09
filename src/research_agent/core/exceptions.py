@@ -31,3 +31,35 @@ class ToolOutputInvalidError(ProjectError):
     def __init__(self, detail: str) -> None:
         self.detail = detail
         super().__init__(detail)
+
+
+class EvaluationDatasetError(ProjectError):
+    """评测数据集格式、标签或安全路径不合法。"""
+
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        super().__init__(detail)
+
+
+class EvaluationLimitError(ProjectError):
+    """评测样例数超过配置上限。"""
+
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        super().__init__(detail)
+
+
+class EvaluationRunFailedError(ProjectError):
+    """评测错误率超过阈值。"""
+
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        super().__init__(detail)
+
+
+class EvaluationNotFoundError(ProjectError):
+    """评测报告不存在。"""
+
+
+class EvaluationReportError(ProjectError):
+    """评测报告写入或读取失败。"""

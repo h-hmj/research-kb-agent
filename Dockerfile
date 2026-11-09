@@ -16,12 +16,14 @@ RUN python -m pip install --upgrade pip \
     && python -m pip install -r requirements.txt
 
 COPY src ./src
+COPY eval ./eval
 
-# 使用非 root 用户运行；数据目录保存 PDF 和 JSON 元数据。
+# 使用非 root 用户运行；数据目录保存 PDF、JSON、日志和评测报告。
 RUN groupadd --system --gid 10001 appuser \
     && useradd --system --uid 10001 --gid appuser --create-home appuser \
     && mkdir -p /app/data/documents /app/data/metadata \
-       /app/data/chunks /app/data/vector_store /app/models \
+       /app/data/chunks /app/data/vector_store /app/data/evaluations \
+       /app/data/logs /app/models \
     && chown -R appuser:appuser /app/data
 
 USER appuser

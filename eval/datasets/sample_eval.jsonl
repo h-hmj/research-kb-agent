@@ -1,0 +1,3 @@
+{"id":"answerable-001","question":"实验中为什么需要设置空白对照？","answerable":true,"document_ids":[],"expected_sources":[{"original_filename":"sample_experiment.pdf","page_number":1}],"expected_answer_keywords":["空白对照","干扰"],"notes":"人工示例：样例 PDF 第 1 页明确说明空白对照用于排除非处理因素干扰。"}
+{"id":"answerable-002","question":"酶活性实验为什么要控制温度？","answerable":true,"document_ids":[],"expected_sources":[{"original_filename":"sample_experiment.pdf","page_number":2}],"expected_answer_keywords":["温度","酶活性"],"notes":"人工示例：样例 PDF 第 2 页说明温度影响酶活性。"}
+{"id":"unanswerable-001","question":"资料中推荐了哪一种测序仪器？","answerable":false,"document_ids":[],"expected_sources":[],"expected_answer_keywords":[],"notes":"人工示例：知识库中没有测序仪器信息，应拒答。"}

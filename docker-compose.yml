@@ -51,6 +51,11 @@ services:
       LOG_MAX_BYTES: "${LOG_MAX_BYTES:-5242880}"
       LOG_BACKUP_COUNT: "${LOG_BACKUP_COUNT:-3}"
       ENABLE_METRICS_ENDPOINT: "${ENABLE_METRICS_ENDPOINT:-true}"
+      EVAL_DATASET_DIR: "${EVAL_DATASET_DIR:-/app/eval/datasets}"
+      EVALUATION_DIR: "${EVALUATION_DIR:-/app/data/evaluations}"
+      EVALUATION_MAX_CASES: "${EVALUATION_MAX_CASES:-100}"
+      EVALUATION_MAX_ERROR_RATE: "${EVALUATION_MAX_ERROR_RATE:-0.2}"
+      EVALUATION_SAVE_DETAILS: "${EVALUATION_SAVE_DETAILS:-false}"
     volumes:
       - research_data:/app/data
       - ./models:/app/models:ro

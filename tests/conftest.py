@@ -40,6 +40,11 @@ def test_settings(tmp_path: Path) -> Settings:
         chunk_overlap=20,
         retrieval_top_k=5,
         max_retrieval_text_length=1000,
+        eval_dataset_dir=tmp_path / "eval_datasets",
+        evaluation_dir=tmp_path / "evaluations",
+        evaluation_max_cases=100,
+        evaluation_max_error_rate=0.2,
+        evaluation_save_details=False,
     )
 
 

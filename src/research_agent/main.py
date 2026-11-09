@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from .api.routes.agent import router as agent_router
 from .api.routes.agent_stream import router as agent_stream_router
 from .api.routes.documents import router as documents_router
+from .api.routes.evaluation import router as evaluation_router
 from .api.routes.health import router as health_router
 from .api.routes.observability import router as observability_router
 from .api.routes.qa import router as qa_router
@@ -23,6 +24,8 @@ from .core.request_context import (
     safe_request_id,
     set_request_id,
 )
+from .evaluation.evaluator import EvaluationService
+from .evaluation.report_service import EvaluationReportService
 from .schemas.common import RootResponse
 from .services.agent_service import AgentService
 from .services.agent_stream_service import AgentStreamService
@@ -56,7 +59,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT_DESCRIPTION = (
     "面向论文与实验记录的知识库与实验助理后端"
-    "（第七阶段：SSE 流式问答与基础可观测性）。"
+    "（第八阶段：可复现评测与可靠性指标）。"
 )
 
 
@@ -153,6 +156,13 @@ def create_app(
         ]
     )
     tool_service = ToolService(tool_registry, metrics)
+    evaluation_service = EvaluationService(
+        settings=settings,
+        retrieval_service=retrieval_service,
+        qa_service=qa_service,
+        agent_service=agent_service,
+        report_service=EvaluationReportService(settings),
+    )
     document_service = DocumentService(settings)
     document_service.set_index_cleaner(indexing_service.remove_document_index)
 
@@ -194,6 +204,7 @@ def create_app(
     app.state.agent_service = agent_service
     app.state.agent_stream_service = agent_stream_service
     app.state.tool_service = tool_service
+    app.state.evaluation_service = evaluation_service
     app.state.metrics = metrics
 
     app.include_router(health_router, prefix=settings.api_prefix)
@@ -203,6 +214,7 @@ def create_app(
     app.include_router(agent_router, prefix=settings.api_prefix)
     app.include_router(agent_stream_router, prefix=settings.api_prefix)
     app.include_router(tools_router, prefix=settings.api_prefix)
+    app.include_router(evaluation_router, prefix=settings.api_prefix)
     if settings.enable_metrics_endpoint:
         app.include_router(observability_router, prefix=settings.api_prefix)
 
