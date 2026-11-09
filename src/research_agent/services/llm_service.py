@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import AsyncIterator
 from typing import Protocol
 
 import httpx
@@ -89,6 +91,13 @@ class LLMService(Protocol):
     async def complete(self, messages: list[dict[str, str]]) -> str:
         """执行一次受控 Chat Completions，供结构化工具复用。"""
 
+    async def stream_answer(
+        self,
+        question: str,
+        evidence: list[EvidenceChunk],
+    ) -> AsyncIterator[str]:
+        """流式生成回答片段。"""
+
 
 class OpenAICompatibleLLMService:
     """调用本地 OpenAI-compatible Chat Completions 接口。"""
@@ -124,6 +133,74 @@ class OpenAICompatibleLLMService:
     async def complete(self, messages: list[dict[str, str]]) -> str:
         """执行一次受控 Chat Completions，供结构化工具复用。"""
         return await self._complete(messages)
+
+    async def stream_answer(
+        self,
+        question: str,
+        evidence: list[EvidenceChunk],
+    ) -> AsyncIterator[str]:
+        """流式生成回答片段，不返回内部状态或引用。"""
+        async for token in self._stream_complete(
+            build_qa_messages(question, evidence)
+        ):
+            yield token
+
+    async def _stream_complete(
+        self,
+        messages: list[dict[str, str]],
+    ) -> AsyncIterator[str]:
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        payload = {
+            "model": self._model,
+            "messages": messages,
+            "temperature": self._temperature,
+            "max_tokens": self._max_tokens,
+            "stream": True,
+        }
+        done = False
+        try:
+            async with httpx.AsyncClient(
+                timeout=self._timeout,
+                trust_env=False,
+            ) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self._base_url}/chat/completions",
+                    json=payload,
+                    headers=headers,
+                ) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if data == "[DONE]":
+                            done = True
+                            break
+                        try:
+                            event = json.loads(data)
+                            choices = event["choices"]
+                            content = choices[0]["delta"].get("content")
+                        except (
+                            json.JSONDecodeError,
+                            KeyError,
+                            IndexError,
+                            TypeError,
+                            AttributeError,
+                        ):
+                            raise LLMUnavailableError(
+                                "本地 LLM 流式响应格式无效"
+                            )
+                        if isinstance(content, str) and content:
+                            yield content
+        except LLMUnavailableError:
+            raise
+        except Exception as exc:
+            raise LLMUnavailableError("本地 LLM 流式调用失败") from exc
+        if not done:
+            raise LLMUnavailableError("本地 LLM 流式响应异常结束")
 
     async def _complete(self, messages: list[dict[str, str]]) -> str:
         """调用本地 LLM；任何网络或响应异常统一转为 LLMUnavailableError。"""

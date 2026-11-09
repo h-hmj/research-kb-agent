@@ -182,6 +182,38 @@ class Settings(BaseSettings):
         ge=1,
         description="组会总结输入的有效段落总字符上限。",
     )
+    enable_streaming: bool = Field(
+        default=True,
+        description="是否启用 Agent SSE 流式接口。",
+    )
+    stream_heartbeat_seconds: float = Field(
+        default=15.0,
+        ge=0.0,
+        le=60.0,
+        description="SSE 心跳间隔秒数，0 表示关闭。",
+    )
+    enable_file_logging: bool = Field(
+        default=False,
+        description="是否启用本地轮转文件日志。",
+    )
+    log_dir: Path = Field(
+        default=Path("./data/logs"),
+        description="文件日志目录。",
+    )
+    log_max_bytes: int = Field(
+        default=5242880,
+        ge=1024,
+        description="单个日志文件最大字节数。",
+    )
+    log_backup_count: int = Field(
+        default=3,
+        ge=0,
+        description="日志备份文件数量。",
+    )
+    enable_metrics_endpoint: bool = Field(
+        default=True,
+        description="是否启用本地 metrics 读取接口。",
+    )
 
     @model_validator(mode="after")
     def validate_chunking(self) -> "Settings":

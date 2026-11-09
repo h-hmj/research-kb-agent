@@ -11,14 +11,20 @@ from ..agents.tool_graph import ToolGraph
 from ..agents.tool_state import ToolState
 from ..schemas.tools import ToolRunResponse
 from ..tools.registry import ToolRegistry
+from .metrics_service import MetricsService
 
 logger = logging.getLogger(__name__)
 
 
 class ToolService:
-    def __init__(self, registry: ToolRegistry) -> None:
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        metrics: MetricsService | None = None,
+    ) -> None:
         self._graph = ToolGraph(registry)
         self.graph = self._graph.graph
+        self._metrics = metrics
 
     async def run(
         self,
@@ -27,6 +33,8 @@ class ToolService:
     ) -> ToolRunResponse:
         request_id = str(uuid4())
         started = time.perf_counter()
+        if self._metrics is not None:
+            self._metrics.record_tool_request()
         initial_state: ToolState = {
             "request_id": request_id,
             "tool_name": tool_name,
@@ -49,7 +57,7 @@ class ToolService:
                 raise RuntimeError("工具工作流未生成响应")
             response = ToolRunResponse.model_validate(response_data)
             logger.info(
-                "Tool completed request_id=%s tool=%s llm=%s status=%s "
+                "tool_completed request_id=%s tool=%s llm=%s status=%s "
                 "retrieval=%d evidence=%d duration_ms=%.0f",
                 request_id,
                 response.tool_name,

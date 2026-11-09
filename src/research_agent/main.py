@@ -1,6 +1,7 @@
 """FastAPI 应用入口。"""
 
 import logging
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -8,15 +9,23 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from .api.routes.agent import router as agent_router
+from .api.routes.agent_stream import router as agent_stream_router
 from .api.routes.documents import router as documents_router
 from .api.routes.health import router as health_router
+from .api.routes.observability import router as observability_router
 from .api.routes.qa import router as qa_router
 from .api.routes.retrieval import router as retrieval_router
 from .api.routes.tools import router as tools_router
 from .core.config import Settings, get_settings
 from .core.logging import configure_logging
+from .core.request_context import (
+    reset_request_id,
+    safe_request_id,
+    set_request_id,
+)
 from .schemas.common import RootResponse
 from .services.agent_service import AgentService
+from .services.agent_stream_service import AgentStreamService
 from .services.checklist_service import ChecklistService
 from .services.citation_service import CitationService
 from .services.document_service import DocumentService
@@ -27,6 +36,11 @@ from .services.embedding_service import (
 from .services.indexing_service import IndexingService
 from .services.llm_service import LLMService, OpenAICompatibleLLMService
 from .services.meeting_summary_service import MeetingSummaryService
+from .services.metrics_service import (
+    MeteredEmbeddingService,
+    MeteredLLMService,
+    MetricsService,
+)
 from .services.qa_service import QAService
 from .services.query_rewrite_service import QueryRewriteService
 from .services.retrieval_service import RetrievalService
@@ -42,7 +56,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT_DESCRIPTION = (
     "面向论文与实验记录的知识库与实验助理后端"
-    "（第六阶段：白名单科研工具调用）。"
+    "（第七阶段：SSE 流式问答与基础可观测性）。"
 )
 
 
@@ -53,13 +67,21 @@ def create_app(
 ) -> FastAPI:
     """创建并配置 FastAPI 应用。"""
     settings = custom_settings or get_settings()
-    configure_logging(settings.log_level)
+    metrics = MetricsService()
+    configure_logging(
+        settings.log_level,
+        enable_file_logging=settings.enable_file_logging,
+        log_dir=settings.log_dir,
+        log_max_bytes=settings.log_max_bytes,
+        log_backup_count=settings.log_backup_count,
+    )
 
-    embedding = embedding_service or SentenceTransformerEmbeddingService(
+    base_embedding = embedding_service or SentenceTransformerEmbeddingService(
         model_path=settings.embedding_model_path,
         device=settings.embedding_device,
         normalize=settings.embedding_normalize,
     )
+    embedding = MeteredEmbeddingService(base_embedding, metrics)
     vector_store = VectorStore(settings.vector_store_dir)
     chunk_store = ChunkStore(settings.chunks_dir)
     indexing_service = IndexingService(
@@ -73,7 +95,7 @@ def create_app(
         embedding_service=embedding,
         vector_store=vector_store,
     )
-    llm = llm_service or OpenAICompatibleLLMService(
+    base_llm = llm_service or OpenAICompatibleLLMService(
         base_url=settings.llm_base_url,
         model=settings.llm_model,
         api_key=settings.llm_api_key,
@@ -81,6 +103,7 @@ def create_app(
         temperature=settings.llm_temperature,
         max_tokens=settings.llm_max_tokens,
     )
+    llm = MeteredLLMService(base_llm, metrics)
     citation_service = CitationService(
         max_text_length=settings.max_citation_text_length
     )
@@ -96,6 +119,11 @@ def create_app(
         retrieval_service=retrieval_service,
         qa_service=qa_service,
         rewrite_service=rewrite_service,
+    )
+    agent_stream_service = AgentStreamService(
+        settings=settings,
+        agent_service=agent_service,
+        metrics=metrics,
     )
     checklist_service = ChecklistService(
         settings=settings,
@@ -124,7 +152,7 @@ def create_app(
             ),
         ]
     )
-    tool_service = ToolService(tool_registry)
+    tool_service = ToolService(tool_registry, metrics)
     document_service = DocumentService(settings)
     document_service.set_index_cleaner(indexing_service.remove_document_index)
 
@@ -164,14 +192,60 @@ def create_app(
     app.state.retrieval_service = retrieval_service
     app.state.qa_service = qa_service
     app.state.agent_service = agent_service
+    app.state.agent_stream_service = agent_stream_service
     app.state.tool_service = tool_service
+    app.state.metrics = metrics
 
     app.include_router(health_router, prefix=settings.api_prefix)
     app.include_router(documents_router, prefix=settings.api_prefix)
     app.include_router(retrieval_router, prefix=settings.api_prefix)
     app.include_router(qa_router, prefix=settings.api_prefix)
     app.include_router(agent_router, prefix=settings.api_prefix)
+    app.include_router(agent_stream_router, prefix=settings.api_prefix)
     app.include_router(tools_router, prefix=settings.api_prefix)
+    if settings.enable_metrics_endpoint:
+        app.include_router(observability_router, prefix=settings.api_prefix)
+
+    @app.middleware("http")
+    async def request_id_middleware(request: Request, call_next):
+        request_id = safe_request_id(request.headers.get("X-Request-ID"))
+        request.state.request_id = request_id
+        token = set_request_id(request_id)
+        started = time.perf_counter()
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+        except Exception:
+            status_code = 500
+            route = request.scope.get("route")
+            path = getattr(route, "path", request.url.path)
+            metrics.record_request(
+                path,
+                500,
+                (time.perf_counter() - started) * 1000,
+            )
+            logger.error(
+                "request_completed method=%s path=%s status=500 duration_ms=%.0f",
+                request.method,
+                path,
+                (time.perf_counter() - started) * 1000,
+            )
+            reset_request_id(token)
+            raise
+        response.headers["X-Request-ID"] = request_id
+        route = request.scope.get("route")
+        path = getattr(route, "path", request.url.path)
+        duration_ms = (time.perf_counter() - started) * 1000
+        metrics.record_request(path, status_code, duration_ms)
+        logger.info(
+            "request_completed method=%s path=%s status=%d duration_ms=%.0f",
+            request.method,
+            path,
+            status_code,
+            duration_ms,
+        )
+        reset_request_id(token)
+        return response
 
     @app.get(
         "/",
@@ -195,15 +269,19 @@ def create_app(
     ) -> JSONResponse:
         """记录未处理异常，并返回不暴露内部细节的 500 响应。"""
         logger.error(
-            "请求处理异常: %s %s",
+            "unhandled_exception method=%s path=%s error=%s",
             request.method,
             request.url.path,
-            exc_info=exc,
+            type(exc).__name__,
         )
-        return JSONResponse(
+        response = JSONResponse(
             status_code=500,
             content={"detail": "Internal Server Error"},
         )
+        request_id = getattr(request.state, "request_id", None)
+        if request_id:
+            response.headers["X-Request-ID"] = request_id
+        return response
 
     return app
 

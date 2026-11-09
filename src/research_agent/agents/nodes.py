@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Literal
 
 from ..core.config import Settings
@@ -22,6 +23,16 @@ REWRITE_FAILED_REASON = (
 InitialRoute = Literal["answer", "rewrite", "refuse"]
 RewriteRoute = Literal["retrieve_retry", "refuse"]
 RetryRoute = Literal["answer", "refuse"]
+
+STEP_MESSAGES = {
+    "retrieve_initial": "正在检索知识库",
+    "assess_initial_evidence": "正在判断证据是否充分",
+    "rewrite_query": "正在改写检索问题",
+    "retrieve_retry": "正在进行二次检索",
+    "assess_retry_evidence": "正在判断二次检索证据",
+    "answer": "正在生成回答",
+    "refuse": "没有足够证据，准备拒答",
+}
 
 
 class AgentNodes:
@@ -45,18 +56,35 @@ class AgentNodes:
             raise ValueError(f"未定义的 workflow step: {step}")
         return [*state["workflow_steps"], step]
 
+    async def _emit(self, state: AgentState, step: str) -> None:
+        sink = state.get("event_sink")
+        if sink is None:
+            return
+        await sink.emit(
+            "workflow",
+            {
+                "request_id": state["request_id"],
+                "step": step,
+                "message": STEP_MESSAGES[step],
+            },
+        )
+
     async def retrieve_initial(self, state: AgentState) -> dict:
         """使用原始问题执行唯一一次初次检索。"""
+        await self._emit(state, "retrieve_initial")
+        started = time.perf_counter()
         retrieved = self._retrieval.search(
             query=state["original_question"],
             top_k=state["top_k"],
             document_ids=state["document_ids"],
         )
+        duration_ms = (time.perf_counter() - started) * 1000
         return {
             "initial_results": retrieved.results,
             "initial_retrieval_count": len(retrieved.results),
             "final_retrieval_count": 0,
             "retrieval_count": 1,
+            "retrieval_duration_ms": duration_ms,
             "workflow_steps": self._steps_for(state, "retrieve_initial"),
         }
 
@@ -77,6 +105,7 @@ class AgentNodes:
         }
         if insufficient and not self._can_rewrite(state):
             updates["refusal_reason"] = NO_EVIDENCE_REASON
+        await self._emit(state, "assess_initial_evidence")
         return updates
 
     def route_initial(
@@ -92,6 +121,7 @@ class AgentNodes:
 
     async def rewrite_query(self, state: AgentState) -> dict:
         """只改写检索查询，不回答；失败时直接转入拒答。"""
+        await self._emit(state, "rewrite_query")
         updates: dict = {
             "rewrite_attempted": True,
             "rewrite_count": 1,
@@ -128,15 +158,21 @@ class AgentNodes:
 
     async def retrieve_retry(self, state: AgentState) -> dict:
         """仅使用改写后的查询检索一次，参数与初次完全相同。"""
+        await self._emit(state, "retrieve_retry")
+        started = time.perf_counter()
         retrieved = self._retrieval.search(
             query=state["current_question"],
             top_k=state["top_k"],
             document_ids=state["document_ids"],
         )
+        duration_ms = (time.perf_counter() - started) * 1000
         return {
             "final_results": retrieved.results,
             "final_retrieval_count": len(retrieved.results),
             "retrieval_count": 2,
+            "retrieval_duration_ms": (
+                state["retrieval_duration_ms"] + duration_ms
+            ),
             "workflow_steps": self._steps_for(state, "retrieve_retry"),
         }
 
@@ -157,6 +193,7 @@ class AgentNodes:
         }
         if insufficient:
             updates["refusal_reason"] = RETRY_NO_EVIDENCE_REASON
+        await self._emit(state, "assess_retry_evidence")
         return updates
 
     def route_retry(
@@ -168,28 +205,63 @@ class AgentNodes:
         return "refuse"
 
     async def answer_with_evidence(self, state: AgentState) -> dict:
-        """复用第四阶段回答逻辑；不再执行检索或改写。"""
+        """复用第四阶段回答逻辑；流式时只转发模型增量文本。"""
+        await self._emit(state, "answer")
         retrieved_count = (
             state["final_retrieval_count"]
             if state["retrieval_count"] == 2
             else state["initial_retrieval_count"]
         )
-        response = await self._qa.answer_from_evidence(
-            question=state["original_question"],
-            evidence=state["evidence"],
-            retrieved_count=retrieved_count,
-            top_k=state["top_k"],
-        )
+        sink = state.get("event_sink")
+        started = time.perf_counter()
+        if sink is None:
+            response = await self._qa.answer_from_evidence(
+                question=state["original_question"],
+                evidence=state["evidence"],
+                retrieved_count=retrieved_count,
+                top_k=state["top_k"],
+            )
+        else:
+            async def emit_token(token: str) -> None:
+                await sink.emit(
+                    "token",
+                    {
+                        "request_id": state["request_id"],
+                        "content": token,
+                    },
+                )
+
+            response = await self._qa.answer_from_evidence_stream(
+                question=state["original_question"],
+                evidence=state["evidence"],
+                retrieved_count=retrieved_count,
+                top_k=state["top_k"],
+                emit_token=emit_token,
+            )
+
+        if sink is not None and response.status == "answered":
+            await sink.emit(
+                "citations",
+                {
+                    "request_id": state["request_id"],
+                    "citations": [
+                        citation.model_dump()
+                        for citation in response.citations
+                    ],
+                },
+            )
         return {
             "status": response.status,
             "answer": response.answer,
             "citations": response.citations,
             "refusal_reason": response.refusal_reason,
+            "llm_duration_ms": (time.perf_counter() - started) * 1000,
             "workflow_steps": self._steps_for(state, "answer"),
         }
 
     async def refuse(self, state: AgentState) -> dict:
         """不调用回答 LLM，返回固定拒答与空引用。"""
+        await self._emit(state, "refuse")
         reason = state.get("refusal_reason") or NO_EVIDENCE_REASON
         return {
             "status": "refused",

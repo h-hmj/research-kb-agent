@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from uuid import uuid4
 
 from ..core.config import Settings
@@ -101,9 +102,48 @@ class QAService:
     ) -> QAResponse:
         """复用第四阶段的“证据 -> LLM -> 服务端引用”逻辑，不再检索。"""
         answer = (await self._llm.answer(question, evidence)).strip()
+        return self._response_from_answer(
+            question,
+            answer,
+            evidence,
+            retrieved_count,
+            top_k,
+        )
+
+    async def answer_from_evidence_stream(
+        self,
+        question: str,
+        evidence: list[EvidenceChunk],
+        retrieved_count: int,
+        top_k: int,
+        emit_token: Callable[[str], Awaitable[None]],
+    ) -> QAResponse:
+        """流式回答；只把模型增量文本交给调用方，不泄露内部元数据。"""
+        tokens: list[str] = []
+        async for token in self._llm.stream_answer(question, evidence):
+            if not token:
+                continue
+            tokens.append(token)
+            await emit_token(token)
+        answer = "".join(tokens).strip()
+        return self._response_from_answer(
+            question,
+            answer,
+            evidence,
+            retrieved_count,
+            top_k,
+        )
+
+    def _response_from_answer(
+        self,
+        question: str,
+        answer: str,
+        evidence: list[EvidenceChunk],
+        retrieved_count: int,
+        top_k: int,
+    ) -> QAResponse:
         if not answer:
             raise LLMUnavailableError("LLM 返回空回答")
-
         evidence_count = len(evidence)
         if answer == QA_REFUSAL_ANSWER:
             return self._refused(
@@ -113,7 +153,6 @@ class QAService:
                 top_k=top_k,
                 reason=LLM_REFUSAL_REASON,
             )
-
         return QAResponse(
             status="answered",
             answer=answer,

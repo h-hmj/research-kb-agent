@@ -16,6 +16,8 @@
   最多一次问题改写和二次检索、最终回答或明确拒答。
 - **第六阶段**：白名单科研工具调用、真实 ToolGraph、基于证据的实验
   checklist、组会总结与安全引用。
+- **第七阶段**：FastAPI SSE 流式 Agent、请求 ID、安全日志、
+  进程内指标和本地 metrics 接口。
 
 当前不调用任何在线 API，不使用数据库或云端向量库。向量化和 LLM 均只使用
 本机服务或本地模型目录；代码不会自动下载模型，LLM 也不会在启动时被探测。
@@ -106,11 +108,26 @@
 - [x] 统一安全响应和 workflow 摘要，不暴露 Prompt/CoT/原始响应
 - [x] 使用 FakeEmbedding/FakeLLM + 真实 FAISS + 真实 ToolGraph 测试
 
-**尚未实现**：OCR、LangChain 业务抽象、多轮对话、流式输出、多 Agent、
-外部网络工具、自动执行实验或外部写入操作、Web 前端或在线模型 API。
+### 第七阶段（SSE 与可观测性）
+
+- [x] `POST /api/v1/agent/ask/stream`，真实 FastAPI `StreamingResponse`
+- [x] SSE 事件白名单：workflow / token / citations / final / error
+- [x] 复用第五阶段 Agent 图和第四阶段回答/引用逻辑
+- [x] 初次有证据时流式 token、citations、final
+- [x] 无证据时只发 workflow 和 final(refused)，不调用回答 LLM
+- [x] 有证据但回答流式 LLM 不可用：error(llm_unavailable)，不伪造 final
+- [x] 改写失败仍走正常 final(refused)，不误报 LLM 流错误
+- [x] Request ID Middleware，JSON 与 SSE 响应均带 `X-Request-ID`
+- [x] 安全结构化日志和轮转文件日志开关
+- [x] 进程内 MetricsService 和 `/api/v1/observability/metrics`
+- [x] 不记录问题正文、证据正文、Prompt、token、密钥或绝对路径
+- [x] 使用 FakeStreamingLLM + 真实 LangGraph/SSE/Metrics 测试
+
+**尚未实现**：OCR、LangChain 业务抽象、多轮对话、WebSocket、多 Agent、
+外部网络工具、生产级监控和鉴权、自动执行实验或外部写入操作、Web 前端。
 扫描型 PDF 可以上传，但没有文字层时提取结果为空，当前不会自动 OCR。
 
-## 第三、四、五、六阶段数据流
+## 第三至第七阶段数据流
 
 ```text
 上传 PDF
@@ -152,6 +169,22 @@ API 请求
 其他工具、shell、URL 或外部写入操作。checklist 必须基于知识库证据；
 组会总结只基于用户提交的组会文本。
 
+SSE 流式 Agent（POST /agent/ask/stream）：
+
+```text
+客户端请求
+  → workflow(request_received)
+  → 检索 / 证据判断
+  ├─ 证据足够 → workflow(answer) → token... → citations → final(answered)
+  └─ 证据不足 → 改写 → 二次检索
+                    ├─ 证据足够 → token... → citations → final(answered)
+                    └─ 仍不足 → final(refused)
+  → workflow(completed)
+```
+
+流式回答只发送模型增量文本；最终引用由服务端根据实际证据生成。
+错误只发送安全 error 事件，不返回 Traceback、Prompt、完整 token 或本地路径。
+
 ## 项目目录结构
 
 ```text
@@ -164,7 +197,8 @@ research-agent/
 │       │   ├── __init__.py
 │       │   ├── config.py                 # Settings 与配置校验
 │       │   ├── exceptions.py             # 模型/工具/改写内部异常
-│       │   └── logging.py                # 标准日志初始化
+│       │   ├── logging.py                # 结构化日志与可选轮转文件
+│       │   └── request_context.py        # Request ID 上下文
 │       ├── agents/
 │       │   ├── __init__.py
 │       │   ├── state.py                  # 显式 Agent Graph State
@@ -188,6 +222,8 @@ research-agent/
 │       │       ├── retrieval.py          # 自然语言检索
 │       │       ├── qa.py                 # 单轮问答
 │       │       ├── agent.py              # LangGraph Agent 接口
+│       │       ├── agent_stream.py       # SSE 流式 Agent
+│       │       ├── observability.py      # 本地 metrics 接口
 │       │       └── tools.py              # 统一工具接口
 │       ├── schemas/
 │       │   ├── __init__.py
@@ -214,7 +250,9 @@ research-agent/
 │       │   ├── agent_service.py          # LangGraph 入口和安全摘要
 │       │   ├── checklist_service.py      # 证据驱动 checklist 与引用
 │       │   ├── meeting_summary_service.py# 组会分段、JSON 校验和引用
-│       │   └── tool_service.py           # ToolGraph 入口和安全摘要
+│       │   ├── tool_service.py           # ToolGraph 入口和安全摘要
+│       │   ├── agent_stream_service.py   # SSE 事件和客户端断开处理
+│       │   └── metrics_service.py        # 进程内指标与计量包装器
 │       └── storage/
 │           ├── __init__.py
 │           ├── README.md
@@ -230,14 +268,17 @@ research-agent/
 │   ├── test_retrieval.py                 # 第三阶段分块/索引/检索测试
 │   ├── test_qa.py                        # 第四阶段问答/引用/拒答测试
 │   ├── test_agent.py                     # 第五阶段 LangGraph 工作流测试
-│   └── test_tools.py                     # 第六阶段工具与 ToolGraph 测试
+│   ├── test_tools.py                     # 第六阶段工具与 ToolGraph 测试
+│   ├── test_streaming.py                 # 第七阶段 SSE 测试
+│   └── test_observability.py             # 第七阶段 Request ID/日志/metrics
 ├── scripts/
 │   └── download_embedding_model.py       # 有网环境模型下载（规避 hf_xet 坑）
 ├── data/                                 # 启动时自动创建，已被 .gitignore 忽略
 │   ├── documents/                        # UUID.pdf
 │   ├── metadata/                         # UUID.json
 │   ├── chunks/                           # UUID.json（页码级 chunk）
-│   └── vector_store/                     # index.faiss + manifest.json
+│   ├── vector_store/                     # index.faiss + manifest.json
+│   └── logs/                             # 可选轮转日志，默认关闭
 ├── models/                               # 本地 Embedding 模型，不提交
 │   └── bge-small-zh-v1.5/
 ├── .dockerignore
@@ -440,7 +481,7 @@ StateGraph，仅推理模型用 Fake 替代。
 预期结果（具体以实际执行为准）：
 
 ```text
-107 passed
+128 passed
 ```
 
 ## 数据目录说明
@@ -543,6 +584,13 @@ data/
 | `AGENT_MAX_CONTEXT_CHARS` | `6000` | Agent 证据文本总上限 |
 | `AGENT_TRACE_ENABLED` | `true` | 是否返回安全工作流摘要 |
 | `MAX_MEETING_CONTEXT_CHARS` | `16000` | 组会有效段落总字符上限 |
+| `ENABLE_STREAMING` | `true` | 是否启用 SSE Agent 接口 |
+| `STREAM_HEARTBEAT_SECONDS` | `15` | SSE 心跳间隔，0 关闭 |
+| `ENABLE_FILE_LOGGING` | `false` | 是否启用本地轮转文件日志 |
+| `LOG_DIR` | `./data/logs` | 文件日志目录 |
+| `LOG_MAX_BYTES` | `5242880` | 单文件最大字节数 |
+| `LOG_BACKUP_COUNT` | `3` | 日志备份数量 |
+| `ENABLE_METRICS_ENDPOINT` | `true` | 是否启用本地 metrics 接口 |
 
 示例：
 
@@ -564,6 +612,11 @@ $env:ENABLE_QUERY_REWRITE = "true"
 $env:MAX_QUERY_REWRITE_ATTEMPTS = "1"
 $env:AGENT_TOP_K = "5"
 $env:MAX_MEETING_CONTEXT_CHARS = "16000"
+$env:ENABLE_STREAMING = "true"
+$env:STREAM_HEARTBEAT_SECONDS = "15"
+$env:ENABLE_FILE_LOGGING = "false"
+$env:LOG_DIR = "./data/logs"
+$env:ENABLE_METRICS_ENDPOINT = "true"
 uvicorn src.research_agent.main:app --reload --port 8000
 ```
 
@@ -585,7 +638,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/ | ConvertTo-Json
 {
   "name": "科研知识库与实验助理 Agent",
   "version": "0.1.0",
-  "description": "面向论文与实验记录的知识库与实验助理后端（第六阶段：白名单科研工具调用）。"
+  "description": "面向论文与实验记录的知识库与实验助理后端（第七阶段：SSE 流式问答与基础可观测性）。"
 }
 ```
 
@@ -1026,6 +1079,124 @@ Invoke-RestMethod `
   `source_segment_ids` 不存在时返回 503。
 - 工具输出不包含 Prompt、模型原始响应、思维链、API Key 或绝对路径。
 
+### SSE 流式 Agent
+
+```powershell
+curl.exe -N `
+  -X POST "http://127.0.0.1:8000/api/v1/agent/ask/stream" `
+  -H "Content-Type: application/json" `
+  -d "{\"question\":\"实验中为什么要设置空白对照？\",\"top_k\":5,\"enable_rewrite\":true}"
+```
+
+响应：
+
+```text
+Content-Type: text/event-stream; charset=utf-8
+Cache-Control: no-cache
+Connection: keep-alive
+X-Accel-Buffering: no
+X-Request-ID: <request_id>
+```
+
+事件顺序：
+
+```text
+workflow(request_received)
+→ workflow(retrieve_initial)
+→ workflow(assess_initial_evidence)
+→ [workflow(rewrite_query) → workflow(retrieve_retry)
+   → workflow(assess_retry_evidence)]
+→ workflow(answer)
+→ token...
+→ citations
+→ workflow(completed)
+→ final
+```
+
+无证据时没有 token/citations：
+
+```text
+workflow(request_received)
+→ workflow(retrieve_initial)
+→ workflow(assess_initial_evidence)
+→ workflow(completed)
+→ final(status=refused)
+```
+
+事件格式：
+
+```text
+event: workflow
+data: {"request_id":"...","step":"retrieve_initial","message":"正在检索知识库"}
+
+event: token
+data: {"request_id":"...","content":"根据资料，"}
+
+event: citations
+data: {"request_id":"...","citations":[...]}
+
+event: final
+data: {"request_id":"...","status":"answered","workflow":{...},"metrics":{...}}
+```
+
+错误事件：
+
+```text
+event: error
+data: {"request_id":"...","code":"llm_unavailable","message":"本地 LLM 服务不可用，请检查本地模型服务状态。"}
+```
+
+- `citations` 只发送一次，且只在 `status=answered` 时发送。
+- `final` 正常完成时只发送一次；流开始后的错误没有 `final`。
+- 嵌入模型不可用时，流式接口会先发送 `error(embedding_unavailable)`；
+  不会伪造 token 或 final。
+- 回答 LLM 不可用时发送 `error(llm_unavailable)`，不发送 citations。
+- 不发送 Prompt、思维链、模型原始响应、密钥或绝对路径。
+- `STREAM_HEARTBEAT_SECONDS` 控制 SSE 注释心跳；0 表示关闭。
+
+### Request ID 与 Metrics
+
+每个 HTTP 响应都带：
+
+```text
+X-Request-ID: <uuid-or-client-safe-id>
+```
+
+客户端传入的 `X-Request-ID` 必须是最多 128 位安全字符，否则服务生成 UUID4。
+请求 ID 会进入结构化日志，但不作为认证信息。
+
+读取进程内指标：
+
+```powershell
+Invoke-RestMethod `
+  -Uri "http://127.0.0.1:8000/api/v1/observability/metrics" `
+  -Method Get | ConvertTo-Json -Depth 8
+```
+
+主要字段：
+
+- `requests_total`
+- `requests_by_path`
+- `responses_by_status`
+- `agent_stream.requests_total`
+- `agent_stream.answered_total`
+- `agent_stream.refused_total`
+- `agent_stream.errors_total`
+- `agent_stream.average_duration_ms`
+- `llm.calls_total`
+- `llm.stream_calls_total`
+- `llm.errors_total`
+- `tool_requests_total`
+- `embedding_errors_total`
+- `total_request_duration_ms`
+- `generated_at`
+
+指标只在内存中保存，重启清零；不写数据库、不调用 LLM/Embedding。
+该接口默认无认证，仅适合本地开发，生产环境必须加鉴权或移除。
+
+文件日志默认关闭。启用后写入 `LOG_DIR/app.log`，使用轮转，且日志只记录请求 ID、
+路径、状态、耗时和安全事件，不记录问题、证据正文、Prompt、token、密钥或绝对路径。
+
 ### 查询文档列表
 
 ```powershell
@@ -1216,6 +1387,22 @@ manifest 中该文档的全部记录
 - workflow 摘要不含 Prompt、密钥、绝对路径或思维链
 - 连续工具请求 State 隔离
 
+第七阶段新增 21 个测试，测试覆盖：
+
+- SSE Content-Type、缓存头和 `X-Request-ID`
+- 初次有证据时 token 增量、citations 一次、final 一次
+- 改写后二次检索成功时仍然 answered
+- 两次检索不足时不发送 token/citations，直接 final(refused)
+- 禁用改写、改写 LLM 不可用、回答 LLM 不可用
+- Embedding 不可用时发送安全 `error(embedding_unavailable)`
+- 空 token 块不发送
+- SSE 事件均为合法 JSON，顺序和不泄露敏感内容
+- Request ID 自动生成、合法保留、非法/过长替换
+- Metrics 计数、平均时长和 GET 接口
+- metrics 不调用 LLM/Embedding，不泄露问题、密钥或路径
+- metrics/streaming 开关关闭时返回 404
+- 文件日志默认不创建文件，启用时只写入临时 LOG_DIR
+
 完整运行：
 
 ```powershell
@@ -1223,8 +1410,9 @@ python -m pytest -vv -s
 ```
 
 真实 Embedding 与 LLM 不随仓库提交，自动化测试使用 FakeEmbedding/FakeLLM；
-真实模型/服务需要按上面的步骤在本地准备，因此不纳入 pytest 测试依赖。
-模型/LLM 不可用 503 路径和完整问答编排已由自动化测试覆盖。
+第七阶段额外使用 FakeStreamingLLM。真实模型/服务需要按上面的步骤在本地准备，
+因此不纳入 pytest 测试依赖。模型/LLM 不可用和流式错误路径已由自动化测试覆盖，
+但真实 Ollama SSE 流式回答仍需单独验证。
 
 ## Docker 启动
 
@@ -1259,12 +1447,16 @@ docker compose down
 PDF、元数据、chunk 和 FAISS 索引在容器重建后仍可保留；同时以只读方式
 挂载 `./models:/app/models`，容器不会下载模型。服务不依赖外部数据库或在线 API。
 
-第四、五、六阶段通过环境变量覆盖 `QA_TOP_K`、`MIN_RETRIEVAL_SCORE`、
+第四至第七阶段通过环境变量覆盖 `QA_TOP_K`、`MIN_RETRIEVAL_SCORE`、
 `LLM_BASE_URL`、`LLM_MODEL`、`ENABLE_QUERY_REWRITE`、
-`MAX_QUERY_REWRITE_ATTEMPTS`、`AGENT_TOP_K`、`MAX_MEETING_CONTEXT_CHARS`
-等配置。Compose 默认把 `LLM_BASE_URL` 设为
+`MAX_QUERY_REWRITE_ATTEMPTS`、`AGENT_TOP_K`、`MAX_MEETING_CONTEXT_CHARS`、
+`ENABLE_STREAMING`、`STREAM_HEARTBEAT_SECONDS`、`ENABLE_FILE_LOGGING`、
+`LOG_DIR`、`ENABLE_METRICS_ENDPOINT` 等配置。Compose 默认把 `LLM_BASE_URL` 设为
 `http://host.docker.internal:11434/v1`，便于容器访问宿主机 Ollama；
 如使用 Docker 内部服务名，可自行覆盖。`LLM_API_KEY` 默认为空。
+
+文件日志启用时写入数据卷内的 `/app/data/logs`，容器重建后仍保留；
+默认关闭。metrics 仅保存在进程内，容器重启后归零。
 
 如果当前环境无法执行 Docker，可先验证 Compose 配置语法：
 
@@ -1294,6 +1486,10 @@ docker compose config
 - 图最多一次改写和一次二次检索，并设置递归上限。
 - `workflow` 只返回安全节点名和计数，不返回 Prompt、模型原始输出或思维链。
 - INFO 日志只记录 request id、检索/证据数量、改写/拒答状态和耗时。
+- 每个响应带 `X-Request-ID`；客户端值必须是短安全字符串，否则重新生成。
+- SSE 只返回白名单事件，错误只返回安全 code/message，不返回异常栈。
+- 流式 token 只在回答 LLM 实际流式生成时发送，不伪造 token。
+- metrics 接口只读进程内计数，不触发模型/向量/外部服务请求。
 - 单机 JSON + FAISS 仅面向课程项目的小规模知识库，不适合多实例并发写入。
 
 ## 已知限制
@@ -1307,8 +1503,12 @@ docker compose config
 - 问题改写和二次检索最多各一次，不进行自主循环或第三次检索。
 - 工具调用只支持三个白名单工具，不支持任意函数、shell、URL 或外部写入。
 - checklist 依赖知识库证据；组会总结只依赖用户提交的文本，不检索知识库。
-- 不支持多轮对话/记忆、流式输出、多 Agent 或外部工具。
-- Docker 镜像未在本环境实际构建，因 Docker Desktop 引擎未启动；仅验证了 Compose 语法。
+- 不支持多轮对话/记忆、WebSocket、多 Agent 或外部工具。
+- 真实 Ollama SSE 流式回答尚未验证；当前流式测试使用 FakeStreamingLLM。
+- metrics 接口默认无认证，仅适合本地开发，生产必须加鉴权或移除。
+- Docker Desktop 当前可运行，但现有 `research-agent:0.1.0` 镜像是旧版本，
+  需要重新执行 `docker compose up -d --build` 才会包含第六、七阶段代码。
+- 当前尚未实现生产级监控、分布式追踪、限流或用户鉴权。
 
 ## 第二阶段验收标准
 
@@ -1383,17 +1583,34 @@ docker compose config
 - [x] 工具响应不泄露 Prompt、CoT、密钥或内部路径
 - [x] 旧 Agent、QA、检索、文档和健康检查全部回归通过
 
-## 第七阶段计划
+## 第七阶段验收标准
 
-1. 真实模型与工具质量评估
-   - 真实 Embedding + 真实本地 LLM 的完整 checklist/组会总结验证
-   - checklist 条目质量、引用覆盖率和组会字段准确率评测
-2. 能力增强
-   - 在明确需求后再考虑多轮对话、流式输出或更多受控工具
-   - 更严格的证据冲突处理和结构化输出约束
-3. 工程化
+- [x] 前六阶段 107 个测试仍然全部通过
+- [x] 第七阶段新增 21 个测试全部通过，总计 128 passed
+- [x] 使用真实 FastAPI StreamingResponse 和 SSE 格式
+- [x] 流式 answered 顺序包含 workflow、token、citations、final
+- [x] 无证据时只发送 workflow 和 final(refused)，不调用回答 LLM
+- [x] 有证据但回答流式 LLM 不可用时发送安全 error，不伪造成功
+- [x] 改写最多一次、二次检索最多一次
+- [x] 请求 ID 贯穿 JSON、SSE、日志和 metrics
+- [x] Request ID 自动生成、合法保留、非法替换
+- [x] 流式事件均为合法 JSON，不包含 Prompt/CoT/密钥/绝对路径
+- [x] 文件日志默认关闭，启用时只写 LOG_DIR 并轮转
+- [x] metrics 计数可读、线程安全、不触发模型/向量/外部请求
+- [x] metrics 接口不泄露问题、文档文本、密钥或日志内容
+- [x] 旧工具、Agent、QA、检索、文档和健康检查全部回归通过
+
+## 第八阶段计划
+
+1. 真实流式模型验证
+   - 使用真实 Ollama SSE 验证 token 增量、断流和超时
+   - 评估流式回答延迟、首 token 时间和引用一致性
+2. 生产化
+   - metrics 鉴权、限流、访问控制
+   - Docker 镜像重建与容器内 SSE/metrics 回归
+3. 质量与工程化
    - 增加 Ruff、mypy、覆盖率和 CI
-   - Docker 镜像构建、模型挂载和容器接口回归验证
+   - 观察指标、错误率和日志轮转容量
 
-当前仍未实现 OCR、LangChain 业务抽象、多轮对话、流式输出、多 Agent、
-外部网络工具、自动实验操作或 Web 前端。
+当前仍未实现 WebSocket、多轮对话、Web 前端、多 Agent、外部网络工具、
+生产级监控/鉴权或自动实验操作。

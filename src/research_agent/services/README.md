@@ -19,5 +19,7 @@
 - `checklist_service.py`：证据过滤、checklist JSON 校验和 citations。
 - `meeting_summary_service.py`：组会分段、结构化 JSON 校验和段落引用。
 - `tool_service.py`：ToolGraph 入口、状态隔离和安全响应。
+- `agent_stream_service.py`：SSE 事件、心跳、断连处理和流式错误。
+- `metrics_service.py`：进程内指标与 LLM/Embedding 计量包装器。
 
-当前不包含多轮对话、流式输出、多 Agent 或外部工具。
+当前不包含多轮对话、WebSocket、多 Agent 或外部工具。

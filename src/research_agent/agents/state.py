@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, TypedDict
+from typing import Literal, Protocol, TypedDict
 
 from ..schemas.qa import EvidenceChunk, QACitation
 from ..schemas.retrieval import RetrievalResult
@@ -22,9 +22,18 @@ SAFE_WORKFLOW_STEPS = frozenset(
 )
 
 
+class EventSink(Protocol):
+    """流式事件入口；非流式执行时状态中为 None。"""
+
+    async def emit(self, event: str, data: dict) -> None:
+        ...
+
+
 class AgentState(TypedDict):
     """图节点之间传递的状态，不保存 Prompt 或模型原始输出。"""
 
+    request_id: str
+    event_sink: EventSink | None
     original_question: str
     current_question: str
     document_ids: list[str] | None
@@ -47,3 +56,5 @@ class AgentState(TypedDict):
     initial_retrieval_count: int
     final_retrieval_count: int
     evidence_count: int
+    retrieval_duration_ms: float
+    llm_duration_ms: float
