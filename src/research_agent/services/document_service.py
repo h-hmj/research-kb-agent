@@ -218,6 +218,14 @@ class DocumentService:
             raise DocumentNotFoundError("文档不存在")
         return document
 
+    def get_pdf_path(self, document_id: str) -> Path:
+        """返回已注册文档的安全 PDF 路径；不接收任意文件路径。"""
+        document = self.get_document(document_id)
+        path = self._file_storage.path_for(document.id)
+        if not path.is_file():
+            raise DocumentNotFoundError("文档不存在")
+        return path
+
     def delete_document(self, document_id: str) -> None:
         """删除索引、PDF 与元数据；目标路径均由 UUID 派生。"""
         canonical_id = self._canonical_document_id(document_id)

@@ -372,6 +372,56 @@ async def test_metadata_json_uses_utf8(
     assert payload["original_filename"] == "论文.pdf"
 
 
+async def test_document_file_preview(client: httpx.AsyncClient) -> None:
+    """已注册文档应返回原始 PDF 字节和预览响应头。"""
+    pdf_bytes = make_pdf_bytes(["Preview page"])
+    upload = await upload_pdf(client, content=pdf_bytes)
+    document_id = upload.json()["id"]
+
+    response = await client.get(f"{DOCUMENTS_URL}/{document_id}/file")
+
+    assert response.status_code == 200
+    assert response.content == pdf_bytes
+    assert response.headers["content-type"].startswith("application/pdf")
+    assert response.headers["content-disposition"] == "inline"
+
+
+async def test_document_file_missing_and_invalid_id(
+    client: httpx.AsyncClient,
+) -> None:
+    """不存在或非法 UUID 不能读取任何文件。"""
+    missing = await client.get(f"{DOCUMENTS_URL}/{uuid4()}/file")
+    invalid = await client.get(f"{DOCUMENTS_URL}/not-a-uuid/file")
+
+    assert missing.status_code == 404
+    assert invalid.status_code == 404
+    assert missing.content != b""
+
+
+async def test_document_file_deleted_returns_404(
+    client: httpx.AsyncClient,
+) -> None:
+    """删除后预览接口不能再访问文件。"""
+    upload = await upload_pdf(client)
+    document_id = upload.json()["id"]
+    assert (
+        await client.delete(f"{DOCUMENTS_URL}/{document_id}")
+    ).status_code == 204
+
+    response = await client.get(f"{DOCUMENTS_URL}/{document_id}/file")
+
+    assert response.status_code == 404
+
+
+async def test_document_file_rejects_path_traversal(
+    client: httpx.AsyncClient,
+) -> None:
+    """预览接口只接受已注册 UUID，不接受路径片段。"""
+    for raw_id in ("..", "../paper", "..%2Fpaper", "C:\\paper.pdf"):
+        response = await client.get(f"{DOCUMENTS_URL}/{raw_id}/file")
+        assert response.status_code == 404
+
+
 async def test_list_pagination(
     client: httpx.AsyncClient,
 ) -> None:

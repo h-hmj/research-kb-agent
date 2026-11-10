@@ -1,7 +1,8 @@
 # 科研知识库与实验助理 Agent
 
-一个面向论文与实验记录的知识库 Agent 后端。项目采用 FastAPI、Pydantic Settings、
-本地文件存储、FAISS 和本地 LLM，按可扩展的分层结构搭建。
+一个面向论文与实验记录的本地知识库 Agent 全栈项目。后端采用 FastAPI、
+Pydantic Settings、本地文件存储、FAISS 和本地 LLM；前端采用 React、Vite 和
+TypeScript，按可扩展的分层结构搭建。
 
 当前已完成：
 
@@ -20,6 +21,8 @@
   进程内指标和本地 metrics 接口。
 - **第八阶段**：人工标注 JSONL 评测集、检索/引用/拒答/Agent 指标、
   QA 与 Agent 对比和可复现 JSON/Markdown 报告。
+- **第九阶段**：React + Vite + TypeScript 本地演示界面、SSE 流式问答、
+  PDF 页码引用预览、科研工具、评测报告和系统状态页面。
 
 当前不调用任何在线 API，不使用数据库或云端向量库。向量化和 LLM 均只使用
 本机服务或本地模型目录；代码不会自动下载模型，LLM 也不会在启动时被探测。
@@ -141,11 +144,29 @@
 - [x] `/evaluations/run`、列表、单报告 API 和 CLI
 - [x] 不使用 LLM-as-a-Judge，不自动生成标签
 
+### 第九阶段（前端与演示体验）
+
+- [x] React 19 + Vite 7 + TypeScript 严格模式
+- [x] 原生 CSS、原生 fetch、原生 hooks，无大型 UI 框架
+- [x] 六个中文页面：总览、文档库、Agent 问答、科研工具、评测、系统状态
+- [x] PDF 上传、文档列表、索引、删除、详情和逐页统计
+- [x] 受控 PDF 预览接口 `GET /documents/{document_id}/file`
+- [x] 引用点击打开 PDF 抽屉并显示“引用页码：第 N 页”
+- [x] 基础 QA 与 LangGraph Agent 模式切换
+- [x] fetch + ReadableStream 解析 POST SSE，支持分片、连续事件和取消
+- [x] 流式 token、workflow 步骤、拒答、request_id、耗时和引用卡片
+- [x] 实验 checklist 和组会总结工具页面
+- [x] 评测运行、QA/Agent 对比表、历史报告
+- [x] 健康状态、进程内 metrics、能力与限制
+- [x] Vite proxy、nginx 多阶段 Docker、SSE 代理配置
+- [x] Vitest 覆盖 SSE、API Client、格式化和 Agent 事件
+- [x] 实际截图 `docs/screenshots/dashboard.png`
+
 **尚未实现**：OCR、LangChain 业务抽象、多轮对话、WebSocket、多 Agent、
-外部网络工具、生产级监控和鉴权、自动执行实验或外部写入操作、Web 前端。
+外部网络工具、生产级监控和鉴权、自动执行实验或外部写入操作。
 扫描型 PDF 可以上传，但没有文字层时提取结果为空，当前不会自动 OCR。
 
-## 第三至第八阶段数据流
+## 第三至第九阶段数据流
 
 ```text
 上传 PDF
@@ -216,6 +237,24 @@ SSE 流式 Agent（POST /agent/ask/stream）：
 
 `sample_eval.jsonl` 只是合成示例；没有上传/索引 `sample_experiment.pdf` 时，
 answerable 指标会偏低，这是正常结果，不代表真实模型性能。
+
+![总览页实际截图](docs/screenshots/dashboard.png)
+
+前端演示流程：
+
+```text
+浏览器（React）
+  → Vite proxy / nginx
+  → FastAPI
+  → 上传 PDF / 建立索引
+  → 基础 QA 或 Agent SSE
+  → 引用点击 → GET /documents/{id}/file#page=N
+  → checklist / 组会总结
+  → 评测报告与 metrics
+```
+
+前端只调用 FastAPI，不直接访问 Ollama、FAISS、模型目录或本地文件系统。
+PDF 预览接口只接受已注册的 document UUID，不接受任意文件路径。
 
 ## 项目目录结构
 
@@ -304,7 +343,7 @@ research-agent/
 │   ├── __init__.py
 │   ├── conftest.py                       # 临时目录与应用测试客户端
 │   ├── test_health.py                    # 第一阶段测试
-│   ├── test_documents.py                 # 第二阶段测试
+│   ├── test_documents.py                 # 第二/九阶段测试（含 PDF 预览）
 │   ├── test_retrieval.py                 # 第三阶段分块/索引/检索测试
 │   ├── test_qa.py                        # 第四阶段问答/引用/拒答测试
 │   ├── test_agent.py                     # 第五阶段 LangGraph 工作流测试
@@ -320,6 +359,27 @@ research-agent/
 │   │   └── README.md
 │   ├── reports/README.md
 │   └── run_evaluation.py                 # 与 API 共用 EvaluationService
+├── web/                                  # React + Vite + TypeScript 前端
+│   ├── src/
+│   │   ├── api/                          # client、documents、agent、tools、eval
+│   │   ├── components/                   # 引用卡片、PDF 抽屉、状态标签
+│   │   ├── lib/                          # SSE parser、格式化
+│   │   ├── pages/                        # 六个页面
+│   │   ├── App.tsx
+│   │   ├── main.tsx
+│   │   └── styles.css
+│   ├── public/
+│   ├── package.json
+│   ├── package-lock.json
+│   ├── vite.config.ts
+│   ├── tsconfig.json
+│   ├── nginx.conf
+│   ├── Dockerfile
+│   └── README.md
+├── docs/
+│   └── screenshots/
+│       ├── README.md
+│       └── dashboard.png                 # 实际总览页截图
 ├── scripts/
 │   └── download_embedding_model.py       # 有网环境模型下载（规避 hf_xet 坑）
 ├── data/                                 # 启动时自动创建，已被 .gitignore 忽略
@@ -347,6 +407,7 @@ research-agent/
 - Windows 10/11
 - Windows PowerShell 5.1 或 PowerShell 7+（推荐）
 - pip
+- Node.js 20.19+ 与 npm（前端已用 Node 24.20 / npm 11.19 验证）
 - Docker Desktop（仅在需要容器运行时安装）
 
 项目运行时不访问外网，不依赖数据库或外部 API。
@@ -510,7 +571,35 @@ data/vector_store/
 应用启动: 科研知识库与实验助理 Agent v0.1.0 (debug=False, api_prefix=/api/v1)
 ```
 
-### 8. 运行测试
+### 8. 启动前端
+
+另开一个 PowerShell 窗口：
+
+```powershell
+cd web
+npm install
+npm run dev
+```
+
+打开 <http://127.0.0.1:5173>。开发服务器通过 Vite proxy 把 `/api` 转发到
+`http://127.0.0.1:8000`，因此本地开发不需要处理 CORS。
+
+```text
+浏览器 :5173
+  → /api/* 由 Vite 代理
+  → FastAPI :8000
+```
+
+前端构建与单元测试：
+
+```powershell
+npm run test
+npm run build
+```
+
+截图见 `docs/screenshots/dashboard.png`。
+
+### 9. 运行测试
 
 ```powershell
 python -m pytest
@@ -531,7 +620,7 @@ StateGraph，仅推理模型用 Fake 替代。
 预期结果（具体以实际执行为准）：
 
 ```text
-145 passed
+149 passed
 ```
 
 ## 数据目录说明
@@ -697,7 +786,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/ | ConvertTo-Json
 {
   "name": "科研知识库与实验助理 Agent",
   "version": "0.1.0",
-  "description": "面向论文与实验记录的知识库与实验助理后端（第八阶段：可复现评测与可靠性指标）。"
+  "description": "面向论文与实验记录的知识库与实验助理后端（第九阶段：前端与本地演示体验）。"
 }
 ```
 
@@ -1409,6 +1498,17 @@ Invoke-RestMethod `
 }
 ```
 
+### 预览 PDF
+
+```powershell
+curl.exe -L "http://127.0.0.1:8000/api/v1/documents/<document_id>/file" `
+  -o preview.pdf
+```
+
+响应类型为 `application/pdf`，`Content-Disposition: inline`。接口只接受已注册的
+document UUID，不接受文件路径；不存在、非法 ID 或已删除文档返回 404。
+前端会附加 `#page=N` 打开引用页码，并在界面显示“引用页码：第 N 页”。
+
 ### 删除文档
 
 ```powershell
@@ -1484,6 +1584,10 @@ manifest 中该文档的全部记录
 16. 列表分页正确
 17. Content-Type 明确为非 PDF 时返回 400
 18. 空文件名返回 400
+19. 已注册文档可返回 PDF 字节和 `application/pdf`
+20. 不存在或非法 UUID 返回 404
+21. 删除后 PDF 预览返回 404
+22. 预览接口不接受路径穿越片段
 
 第一阶段 3 个健康检查/根路径测试继续保留。
 
@@ -1581,7 +1685,37 @@ manifest 中该文档的全部记录
 - 单 case 错误继续执行，错误率超阈值整体失败并保留 failed 报告
 - 前七阶段 128 个测试回归通过
 
+第九阶段后端新增 4 个 PDF 预览测试，测试覆盖：
+
+- 已存在文档返回原始 PDF 字节
+- `Content-Type` 为 `application/pdf`，`Content-Disposition: inline`
+- 不存在或非法 UUID 返回 404
+- 删除后不能再访问
+- 路径片段不能绕过 UUID 校验
+
+后端完整测试总数为 **149 passed**，包含前八阶段全部回归。
+
+第九阶段前端使用 Vitest，新增 11 个测试：
+
+- SSE 分片、连续事件、注释、multiline data
+- Agent 事件 JSON 解析、未知事件忽略、error 事件保留
+- FastAPI `detail` 错误转换
+- `X-Request-ID` 保存
+- 文件大小、百分比、截断和日期格式化
+
 完整运行：
+
+```powershell
+python -m pytest -vv -s
+```
+
+前端：
+
+```powershell
+cd web
+npm run test
+npm run build
+```
 
 ```powershell
 python -m pytest -vv -s
@@ -1606,24 +1740,30 @@ docker compose up --build
 docker compose up --build -d
 ```
 
-检查状态并访问接口：
+检查状态并访问前端：
 
 ```powershell
 docker compose ps
-Invoke-RestMethod -Uri http://127.0.0.1:8000/api/v1/health | ConvertTo-Json
+Invoke-RestMethod -Uri http://127.0.0.1:5173/api/v1/health | ConvertTo-Json
 ```
+
+打开 <http://127.0.0.1:5173>。后端只在 Compose 网络内暴露 `8000`，
+浏览器通过 nginx 同源 `/api` 代理访问，不直接访问宿主机 8000。
 
 查看日志或停止：
 
 ```powershell
 docker compose logs -f research-agent
+docker compose logs -f research-agent-web
 docker compose down
 ```
 
-容器内使用 Uvicorn 监听 `0.0.0.0:8000`，宿主机映射到 `8000`。
-`docker-compose.yml` 使用命名卷 `research_data` 挂载 `/app/data`，
-PDF、元数据、chunk 和 FAISS 索引在容器重建后仍可保留；同时以只读方式
-挂载 `./models:/app/models`，容器不会下载模型。服务不依赖外部数据库或在线 API。
+容器内使用 Uvicorn 监听 `0.0.0.0:8000`，只在 Compose 内暴露；nginx 前端容器
+监听 80，宿主机映射到 `5173`。`docker-compose.yml` 使用命名卷
+`research_data` 挂载 `/app/data`，PDF、元数据、chunk、FAISS 索引、日志和评测报告
+在容器重建后仍可保留；同时以只读方式挂载 `./models:/app/models`，容器不会下载模型。
+前端 nginx 对 `/api/` 关闭 `proxy_buffering`，并配置较长的读写超时以支持 SSE。
+服务不依赖外部数据库或在线 API，也没有把 CORS 设置为 `*`。
 
 第四至第八阶段通过环境变量覆盖 `QA_TOP_K`、`MIN_RETRIEVAL_SCORE`、
 `LLM_BASE_URL`、`LLM_MODEL`、`ENABLE_QUERY_REWRITE`、
@@ -1644,7 +1784,18 @@ PDF、元数据、chunk 和 FAISS 索引在容器重建后仍可保留；同时�
 docker compose config
 ```
 
-**没有实际构建和运行容器时，不应声称 Docker 验证通过。**
+本轮已实际构建前后端镜像并启动容器，验证了：
+
+- 后端容器 `healthy`
+- 前端 nginx 容器映射 `5173:80`
+- `/api/v1/health`
+- 示例 PDF 上传与索引
+- `GET /documents/{id}/file` 返回 `application/pdf`
+- 检索接口
+- retrieval 评测和执行历史
+- nginx SSE 收到 workflow 事件与 heartbeat
+
+由于 Ollama 未启动，Agent 的最终 token/final 回答仍未验证。
 
 ## 安全与健壮性
 
@@ -1673,6 +1824,12 @@ docker compose config
 - 评测标签必须人工编写；不使用 LLM 自动生成标准答案或 LLM-as-a-Judge。
 - 评测只比较服务端返回 citation 与人工 expected_sources，不评价完整语义。
 - 评测报告默认不保存完整 question、answer、citation text 或 notes。
+- PDF 预览接口只接受已注册 document UUID，不接收文件路径或目录参数。
+- PDF 响应只返回 `application/pdf`，不返回服务器绝对路径。
+- 前端只调用 FastAPI，不直接访问 Ollama、FAISS 或模型目录。
+- 前端不写 API Key、模型路径或后端敏感配置；nginx 不设置 CORS `*`。
+- 前端 SSE 解析只处理白名单事件，不把 token、问题正文或完整引用写入 console。
+- 前端 Docker 的 nginx 对 SSE 关闭代理缓冲，并设置较长读写超时。
 - 单机 JSON + FAISS 仅面向课程项目的小规模知识库，不适合多实例并发写入。
 
 ## 已知限制
@@ -1693,14 +1850,21 @@ docker compose config
   真实论文语料、真实 LLM 的评测指标尚未完成。
 - `sample_eval.jsonl` 只是格式示例，不是科研基准，不能据此宣称模型性能。
 - 评测是同步本地小规模执行，不适合大批量或并发评测。
-- Docker Desktop 当前可运行，但现有 `research-agent:0.1.0` 镜像是旧版本，
-  需要重新执行 `docker compose up -d --build` 才会包含第六至八阶段代码。
+- 前端只做了桌面宽度演示；窄屏仅保证基本布局，不做移动端专门适配。
+- 前端使用本地状态切换页面，不使用 React Router，也不持久化聊天记录。
+- PDF 预览依赖浏览器内置查看器；`#page=N` 是否自动跳页由浏览器决定。
+- 真实浏览器中已实际截图总览页；其他页面的完整点击链路尚未逐项人工验收。
+- 后端与前端 Docker 镜像已实际构建并启动；后端健康、PDF 预览、
+  上传/索引、检索和 retrieval 评测已通过 nginx 验证。
+- nginx SSE 已验证能收到 workflow 事件和 heartbeat；因 Ollama 未启动，
+  真实回答 token/final 尚未验证。
+- 当前运行容器内的 sample 文档是本轮验证时上传的合成 PDF，不是用户论文。
 - 当前尚未实现生产级监控、分布式追踪、限流或用户鉴权。
 
 ## 第二阶段验收标准
 
 - [x] 第一阶段 3 个测试仍然通过
-- [x] 第二阶段 18 个测试全部通过
+- [x] 第二阶段基础测试与第九阶段新增 PDF 预览测试全部通过
 - [x] 有效 PDF 可以上传
 - [x] PDF 每页文本和页码被保存
 - [x] 文档详情可以查询
@@ -1807,19 +1971,45 @@ docker compose config
 - [x] 未使用 LLM-as-a-Judge，未生成评测标签
 - [x] 前七阶段全部回归通过
 
-## 第九阶段计划
+## 第九阶段验收标准
 
-1. 真实评测
-   - 准备人工确认的真实论文/实验记录数据集
-   - 用真实 Embedding 和本地 LLM 运行 retrieval/qa/agent/compare
-   - 只报告真实结果，不用 sample_eval 宣称模型性能
-2. 质量改进
-   - 根据失败案例调整检索、证据阈值和回答格式
-   - 建立人工复核流程，避免标签漂移
+- [x] 后端 149 passed，前八阶段全部回归通过
+- [x] 新增 PDF 预览接口，共 4 个后端测试
+- [x] 前端 TypeScript 严格模式和 `noUncheckedIndexedAccess`
+- [x] 前端无 `any`，API 数据有明确类型
+- [x] `npm run test`：4 个测试文件、11 个测试通过
+- [x] `npm run build`：TypeScript 和 Vite 生产构建通过
+- [x] 六个中文页面和侧边导航
+- [x] PDF 上传、列表、索引、删除、详情和逐页统计
+- [x] iframe PDF 抽屉，显示引用页码并附加 `#page=N`
+- [x] 基础 QA 和 LangGraph Agent 模式
+- [x] fetch + ReadableStream SSE 解析、分片、连续事件和取消
+- [x] Agent 流程步骤、token、拒答、request_id、耗时和引用
+- [x] checklist 和组会总结页面
+- [x] 评测运行、QA/Agent 对比表和历史报告
+- [x] 健康检查和 metrics 页面
+- [x] Vite proxy 实际连通后端健康接口
+- [x] 实际总览页截图 `docs/screenshots/dashboard.png`
+- [x] 前后端 Docker 镜像实际构建并启动
+- [x] nginx 同源代理、健康检查、PDF 预览、检索和 retrieval 评测
+- [x] nginx SSE 收到 workflow 事件与 heartbeat
+- [ ] 其他页面逐项真实浏览器表单提交验收
+- [ ] 真实 Ollama token/final 流式回答
+- [ ] 真实科研语料评测
+
+## 第十阶段计划
+
+1. 真实端到端演示
+   - 启动真实 Ollama，验证 Agent SSE、引用和 PDF 预览
+   - 对上传、索引、QA、工具、评测逐项点击验收
+   - 在不伪造结果的前提下更新截图
+2. 前端质量
+   - 补充浏览器级测试或 Playwright（只在环境允许时）
+   - 改进空状态、错误提示和无障碍细节
 3. 工程化
+   - 前端 Docker 镜像实际构建和 Compose 联调
    - Ruff、mypy、覆盖率和 CI
-   - Docker CPU 镜像重建与容器内评测回归
-   - metrics 鉴权、限流和容量观察
+   - 真实科研语料评测和 metrics 容量观察
 
-当前仍未实现 WebSocket、多轮对话、Web 前端、多 Agent、外部网络工具、
+当前仍未实现 WebSocket、多轮对话、多 Agent、外部网络工具、
 生产级监控/鉴权或自动实验操作。

@@ -37,6 +37,11 @@ models/
 .hf-cache/
 *.log
 
+# 前端依赖、构建产物与本地 npm 缓存
+web/node_modules/
+web/dist/
+web/.npm-cache/
+
 # IDE / 操作系统文件
 .idea/
 .vscode/

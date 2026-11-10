@@ -5,8 +5,8 @@ services:
       dockerfile: Dockerfile
     image: research-agent:0.1.0
     container_name: research-agent
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     environment:
       APP_NAME: "科研知识库与实验助理 Agent"
       APP_VERSION: "0.1.0"
@@ -71,6 +71,18 @@ services:
       timeout: 5s
       start_period: 5s
       retries: 3
+    restart: unless-stopped
+
+  research-agent-web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: research-agent-web
+    ports:
+      - "5173:80"
+    depends_on:
+      research-agent:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

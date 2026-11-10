@@ -14,6 +14,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import FileResponse
 
 from ...schemas.documents import DocumentDetail, DocumentListResponse
 from ...schemas.retrieval import IndexDocumentResponse
@@ -116,6 +117,28 @@ async def get_document(
         return service.get_document(document_id)
     except DocumentServiceError as exc:
         raise _http_exception(exc) from exc
+
+
+@router.get(
+    "/{document_id}/file",
+    response_class=FileResponse,
+    summary="预览已注册 PDF 文件",
+    description="仅返回该文档 UUID 对应的已保存 PDF，不接受任意文件路径。",
+)
+def get_document_file(
+    document_id: str,
+    service: Annotated[DocumentService, Depends(get_document_service)],
+) -> FileResponse:
+    """返回安全的 PDF 文件内容，供前端预览使用。"""
+    try:
+        path = service.get_pdf_path(document_id)
+    except DocumentServiceError as exc:
+        raise _http_exception(exc) from exc
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "inline"},
+    )
 
 
 @router.post(

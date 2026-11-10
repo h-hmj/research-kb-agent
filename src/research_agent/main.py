@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT_DESCRIPTION = (
     "面向论文与实验记录的知识库与实验助理后端"
-    "（第八阶段：可复现评测与可靠性指标）。"
+    "（第九阶段：前端与本地演示体验）。"
 )
 
 
