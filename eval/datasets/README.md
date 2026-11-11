@@ -2,6 +2,10 @@
 
 `sample_eval.jsonl` 是**人工编写的合成示例**，不是通用科研基准，也不代表真实模型性能。
 
+`user_eval_draft.jsonl` 是根据当前已上传 PDF 生成的 **AI 草稿**，包含 20 道
+answerable 和 4 道 unanswerable 题。它还没有经过人工逐条确认，不能直接作为
+正式评测结论；使用前必须核对问题、页码、来源文件和 answerable 标签。
+
 ## 运行示例前
 
 1. 上传同目录的 `sample_experiment.pdf`，文件名必须是 `sample_experiment.pdf`。
