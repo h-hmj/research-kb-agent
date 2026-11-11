@@ -30,6 +30,10 @@ ENV/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+# pytest 运行时在项目根目录留下的临时产物
+pytest-of-*/
+pytest-cache-files-*/
+.pytest_tmp/
 
 # 本地数据、模型与日志
 data/

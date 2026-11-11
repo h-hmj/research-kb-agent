@@ -18,6 +18,8 @@ from ..schemas.retrieval import DocumentChunk
 
 logger = logging.getLogger(__name__)
 
+# manifest 结构版本号：字段语义变化时必须递增，
+# 旧版本文件会在 _load_snapshot 中直接被判为不兼容，避免按错误格式解析。
 _MANIFEST_VERSION = 1
 
 
@@ -35,18 +37,30 @@ class VectorStoreWriteError(VectorStoreError):
 
 @dataclass
 class _Snapshot:
+    """一次读取得到的一致视图。
+
+    manifest 条目与 FAISS 索引必须成对使用：读取时就校验二者数量与维度一致，
+    后续所有重建操作都基于同一份快照，避免把索引和 manifest 读成两个不同版本。
+    """
+
     dimension: int
     entries: list[dict[str, Any]]
     index: faiss.Index
 
 
 class VectorStore:
-    """使用 IndexFlatIP 保存归一化向量，并维护稳定的 manifest 映射。"""
+    """使用 IndexFlatIP 保存归一化向量，并维护稳定的 manifest 映射。
+
+    - 向量与 chunk 元数据分别落在 index.faiss / manifest.json，靠列表下标一一对应；
+    - IndexFlatIP 不支持原地删除，增删改一律「重建全量索引」；
+    - 所有读写串行化在 self._lock 上。
+    """
 
     def __init__(self, root: Path) -> None:
         self._root = Path(root).expanduser().resolve()
         self._index_path = self._root / "index.faiss"
         self._manifest_path = self._root / "manifest.json"
+        # 用可重入锁：外层编排可能已持锁再调用这里的方法，普通 Lock 会自死锁。
         self._lock = threading.RLock()
 
     @property
@@ -77,6 +91,8 @@ class VectorStore:
         """替换某文档的全部向量，并返回索引维度。"""
         with self._lock:
             snapshot = self._load_snapshot()
+            # IndexFlatIP 不支持删除单条向量，所以先保留其它文档的向量，
+            # 再与本次新向量拼成完整矩阵重建索引。
             remaining_entries: list[dict[str, Any]] = []
             remaining_vectors: list[np.ndarray] = []
 
@@ -100,17 +116,20 @@ class VectorStore:
                         np.asarray(vector, dtype=np.float32)
                     )
 
+            # 入参自检：每个 chunk 必须且只能对应一条向量。
             if vectors.ndim != 2 or vectors.shape[0] != len(chunks):
                 raise VectorStoreCorruptionError("Embedding 向量数量不匹配")
 
             new_dimension = int(vectors.shape[1]) if chunks else 0
             existing_dimension = snapshot.dimension if snapshot else 0
+            # 同一索引内不允许混用不同 embedding 模型的维度，否则内积无意义。
             if (
                 remaining_entries
                 and chunks
                 and existing_dimension != new_dimension
             ):
                 raise VectorStoreCorruptionError("新旧向量维度不一致")
+            # 有存量向量时沿用旧维度；否则以新向量维度为准（首次写入或清空后重建）。
             dimension = existing_dimension if remaining_entries else new_dimension
 
             new_entries: list[dict[str, Any]] = []
@@ -122,6 +141,7 @@ class VectorStore:
                     }
                 )
 
+            # vector_position 必须与拼接后的行号严格对应，否则检索会取到别人的 chunk。
             all_entries = remaining_entries + new_entries
             if not all_entries:
                 self._remove_index_files()
@@ -139,6 +159,7 @@ class VectorStore:
             if all_vectors.shape != (len(all_entries), dimension):
                 raise VectorStoreCorruptionError("向量矩阵与 manifest 数量不一致")
 
+            # 全量重建：新索引与 manifest 一起落盘，成功的判定点是 _write_index_files 返回。
             index = faiss.IndexFlatIP(dimension)
             index.add(all_vectors)
             manifest = {
@@ -156,6 +177,7 @@ class VectorStore:
             if snapshot is None:
                 return False
 
+            # 与 upsert 同理：重建索引，只保留未命中文档的向量。
             remaining_entries: list[dict[str, Any]] = []
             remaining_vectors: list[np.ndarray] = []
             removed = False
@@ -212,9 +234,12 @@ class VectorStore:
                 return []
 
             query = np.asarray(query_vector, dtype=np.float32).reshape(-1)
+            # 维度不符通常意味着索引是另一个 embedding 模型建的，直接报错比返回空结果更安全。
             if query.shape[0] != snapshot.dimension:
                 raise VectorStoreCorruptionError("查询向量维度与索引不一致")
 
+            # FAISS 要求 float32 且内存连续；一次取回全部条目，
+            # 以便先按 document_ids 过滤片段、再截断 top_k，避免过滤后数量不足。
             try:
                 scores, positions = snapshot.index.search(
                     np.ascontiguousarray(query.reshape(1, -1)),
@@ -240,8 +265,10 @@ class VectorStore:
             return results[:top_k]
 
     def _load_snapshot(self) -> _Snapshot | None:
+        """读取并交叉校验索引与 manifest；两者都不存在时返回 None（空索引）。"""
         index_exists = self._index_path.is_file()
         manifest_exists = self._manifest_path.is_file()
+        # 两个文件是配套产物：只存在其一时说明上次写入被中断，视为损坏。
         if not index_exists and not manifest_exists:
             return None
         if index_exists != manifest_exists:
@@ -270,6 +297,8 @@ class VectorStore:
         except Exception as exc:
             raise VectorStoreCorruptionError("FAISS 索引无法读取") from exc
 
+        # 交叉校验：向量数量与维度必须和 manifest 描述完全一致，
+        # 否则按位置取 chunk 会静默错配到别的文档。
         if index.ntotal != len(entries):
             raise VectorStoreCorruptionError("FAISS 数量与 manifest 不一致")
         if entries and index.d != dimension:
@@ -295,10 +324,12 @@ class VectorStore:
         index: faiss.Index,
         manifest: dict[str, Any],
     ) -> None:
+        """先写临时文件再原子替换，保证任何时刻磁盘上都是完整可读的旧版本或新版本。"""
         self.ensure_directory()
         index_temp: Path | None = None
         manifest_temp: Path | None = None
 
+        # 先备份旧内容，替换过程中任一步失败都用它回滚。
         old_index = (
             self._index_path.read_bytes() if self._index_path.is_file() else None
         )
@@ -335,6 +366,7 @@ class VectorStore:
                 handle.flush()
                 os.fsync(handle.fileno())
 
+            # os.replace 在同一文件系统内是原子操作，读侧不会看到写了一半的文件。
             os.replace(index_temp, self._index_path)
             os.replace(manifest_temp, self._manifest_path)
         except Exception as exc:
@@ -347,10 +379,12 @@ class VectorStore:
             raise VectorStoreWriteError("索引写入失败") from exc
 
     def _remove_index_files(self) -> None:
+        # 索引为空时连文件一起删掉，让下次读取走「无索引」分支而不是空索引。
         self._index_path.unlink(missing_ok=True)
         self._manifest_path.unlink(missing_ok=True)
 
     def _restore_file(self, path: Path, data: bytes | None) -> None:
+        # 回滚同样走「临时文件 + 原子替换」，避免恢复过程再留下半截文件。
         try:
             if data is None:
                 path.unlink(missing_ok=True)

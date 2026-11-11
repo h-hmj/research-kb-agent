@@ -59,6 +59,7 @@ services:
     volumes:
       - research_data:/app/data
       - ./models:/app/models:ro
+      - ./eval/datasets:/app/eval/datasets:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
